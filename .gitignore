@@ -1,0 +1,26 @@
+# Base de données
+leads.db
+
+# Runtime
+server.pid
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Résultats de jobs
+.job_results/
+
+# Données de test
+Documents/
+*.xlsx
+*.xls
+*.csv
+
+# IDE
+.claude/
+
+# Environnement (si ajouté plus tard)
+.env
+.env.local

@@ -1,0 +1,924 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Combine Leadlists — Sonoria</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #0f0f13;
+      color: #e0e0e0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 20px;
+    }
+
+    h1 { font-size: 1.8rem; font-weight: 700; color: #fff; margin-bottom: 6px; letter-spacing: -0.5px; }
+    .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 28px; }
+
+    /* Tabs */
+    .tabs {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 24px;
+      background: #1a1a22;
+      border: 1px solid #2a2a38;
+      border-radius: 10px;
+      padding: 4px;
+    }
+
+    .tab-btn {
+      padding: 9px 22px;
+      background: none;
+      border: none;
+      border-radius: 7px;
+      color: #888;
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tab-btn.active {
+      background: #6c63ff;
+      color: #fff;
+    }
+
+    .tab-btn:hover:not(.active) { color: #ccc; background: #22222e; }
+
+    .tab-panel { display: none; width: 100%; max-width: 680px; }
+    .tab-panel.active { display: block; }
+
+    /* Card */
+    .card {
+      background: #1a1a22;
+      border: 1px solid #2a2a38;
+      border-radius: 14px;
+      padding: 32px;
+    }
+
+    /* Drop zone */
+    .dropzone {
+      border: 2px dashed #3a3a52;
+      border-radius: 10px;
+      padding: 40px 24px;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      position: relative;
+    }
+    .dropzone:hover, .dropzone.drag-over { border-color: #6c63ff; background: rgba(108,99,255,0.06); }
+    .dropzone .icon { font-size: 2.2rem; margin-bottom: 10px; }
+    .dropzone p { color: #aaa; font-size: 0.9rem; }
+    .dropzone p strong { color: #6c63ff; }
+    .dropzone p.hint { font-size: 0.76rem; color: #666; margin-top: 6px; }
+    .dropzone input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+
+    /* File list */
+    .file-list { margin-top: 16px; display: flex; flex-direction: column; gap: 7px; }
+    .file-item {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #22222e; border: 1px solid #2e2e40; border-radius: 8px;
+      padding: 9px 14px; font-size: 0.85rem;
+    }
+    .file-item .file-name { color: #ccc; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 85%; }
+    .file-item .remove-btn { background: none; border: none; color: #555; cursor: pointer; font-size: 1rem; padding: 2px 6px; border-radius: 4px; transition: color 0.15s; }
+    .file-item .remove-btn:hover { color: #e05555; }
+
+    /* Inputs */
+    .field { margin-bottom: 16px; }
+    .field label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 6px; font-weight: 500; }
+    .field input {
+      width: 100%; padding: 10px 14px;
+      background: #22222e; border: 1px solid #2e2e40;
+      border-radius: 8px; color: #e0e0e0; font-size: 0.9rem;
+      outline: none; transition: border-color 0.15s;
+    }
+    .field input:focus { border-color: #6c63ff; }
+    .field input::placeholder { color: #555; }
+
+    .api-hint {
+      font-size: 0.75rem;
+      color: #666;
+      margin-top: 6px;
+      line-height: 1.5;
+    }
+    .api-hint a { color: #6c63ff; text-decoration: none; }
+    .api-hint a:hover { text-decoration: underline; }
+
+    /* Buttons */
+    .btn-primary {
+      width: 100%; padding: 13px; background: #6c63ff; color: #fff;
+      border: none; border-radius: 10px; font-size: 1rem; font-weight: 600;
+      cursor: pointer; transition: background 0.2s, opacity 0.2s; margin-top: 20px;
+    }
+    .btn-primary:hover:not(:disabled) { background: #5a52e0; }
+    .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+    .btn-green {
+      width: 100%; padding: 12px; background: #1db954; color: #fff;
+      border: none; border-radius: 10px; font-size: 0.95rem; font-weight: 600;
+      cursor: pointer; transition: background 0.2s; margin-top: 12px;
+    }
+    .btn-green:hover { background: #18a349; }
+
+    /* Spinner */
+    .spinner {
+      display: inline-block; width: 15px; height: 15px;
+      border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff;
+      border-radius: 50%; animation: spin 0.7s linear infinite;
+      vertical-align: middle; margin-right: 7px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Stats */
+    .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 18px; }
+    .stat-box { background: #22222e; border: 1px solid #2e2e40; border-radius: 8px; padding: 13px; text-align: center; }
+    .stat-box .stat-num { font-size: 1.5rem; font-weight: 700; color: #6c63ff; }
+    .stat-box .stat-label { font-size: 0.7rem; color: #777; margin-top: 3px; text-transform: uppercase; letter-spacing: 0.5px; }
+
+    .file-stats table { width: 100%; border-collapse: collapse; font-size: 0.8rem; margin-bottom: 14px; }
+    .file-stats th { text-align: left; color: #666; font-weight: 500; padding: 5px 8px; border-bottom: 1px solid #2a2a38; }
+    .file-stats td { padding: 5px 8px; color: #bbb; border-bottom: 1px solid #1e1e28; }
+
+    /* Progress */
+    .progress-section { margin-top: 24px; }
+    .progress-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .progress-header .prog-label { font-size: 0.85rem; color: #aaa; }
+    .progress-header .prog-count { font-size: 0.8rem; color: #666; }
+
+    .progress-bar-track { background: #22222e; border-radius: 6px; height: 8px; overflow: hidden; margin-bottom: 16px; }
+    .progress-bar-fill { height: 100%; background: linear-gradient(90deg, #6c63ff, #a78bfa); border-radius: 6px; transition: width 0.4s ease; width: 0%; }
+
+    /* Results table */
+    .results-table-wrap { max-height: 320px; overflow-y: auto; border: 1px solid #2a2a38; border-radius: 8px; margin-bottom: 14px; }
+    .results-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+    .results-table th { position: sticky; top: 0; background: #1a1a22; color: #777; font-weight: 500; padding: 8px 10px; border-bottom: 1px solid #2a2a38; text-align: left; }
+    .results-table td { padding: 7px 10px; border-bottom: 1px solid #1e1e28; color: #ccc; vertical-align: top; }
+    .results-table td.icebreaker-cell { color: #a78bfa; font-style: italic; }
+    .results-table td.accroche-cell { color: #67e8a0; font-style: italic; }
+    .results-table td.secteur-cell { color: #f59e42; font-size: 0.72rem; white-space: nowrap; }
+    .results-table td.secteur-cell.hors-cible { color: #e05555; font-weight: 600; }
+    .results-table td.corps-cell { color: #888; font-size: 0.72rem; max-width: 260px; }
+    .results-table tr:last-child td { border-bottom: none; }
+    .results-table tr:hover td { background: rgba(108,99,255,0.04); }
+
+    /* Status badge */
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 0.7rem; font-weight: 600; }
+    .badge-scraping { background: rgba(255,180,50,0.15); color: #ffb432; }
+    .badge-generating { background: rgba(108,99,255,0.15); color: #a78bfa; }
+    .badge-preserved { background: rgba(100,100,120,0.2); color: #888; }
+    .badge-done { background: rgba(29,185,84,0.15); color: #1db954; }
+    .badge-error { background: rgba(224,85,85,0.15); color: #e05555; }
+
+    /* Error */
+    .error-box { background: rgba(224,85,85,0.1); border: 1px solid rgba(224,85,85,0.3); border-radius: 8px; padding: 11px 14px; color: #e05555; font-size: 0.85rem; margin-top: 14px; }
+
+    .warn { color: #888; font-size: 0.78rem; text-align: center; margin-top: 8px; }
+
+    /* Lists table */
+    .lists-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+    .lists-table th { text-align: left; color: #555; font-weight: 500; padding: 5px 8px; border-bottom: 1px solid #2a2a38; }
+    .lists-table td { padding: 7px 8px; border-bottom: 1px solid #1e1e28; color: #bbb; vertical-align: middle; }
+    .lists-table tr:last-child td { border-bottom: none; }
+    .list-name-display { cursor: pointer; border-bottom: 1px dashed #3a3a52; padding-bottom: 1px; }
+    .list-name-display:hover { border-bottom-color: #6c63ff; color: #fff; }
+    .list-name-input { background: #22222e; border: 1px solid #6c63ff; border-radius: 4px; color: #fff; padding: 3px 7px; font-size: 0.8rem; width: 100%; outline: none; }
+    .btn-dl { background: none; border: 1px solid #3a3a52; border-radius: 5px; color: #6c63ff; padding: 3px 9px; font-size: 0.75rem; cursor: pointer; text-decoration: none; display: inline-block; }
+    .btn-dl:hover { background: rgba(108,99,255,0.1); border-color: #6c63ff; }
+    .btn-delete-list { background: none; border: 1px solid #3a3a52; border-radius: 5px; color: #888; padding: 3px 7px; font-size: 0.75rem; cursor: pointer; margin-left: 6px; }
+    .btn-delete-list:hover { background: rgba(220,50,50,0.12); border-color: #c0392b; color: #e05555; }
+    .btn-delete-list:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* Scrollbar */
+    ::-webkit-scrollbar { width: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #2e2e40; border-radius: 3px; }
+  </style>
+</head>
+<body>
+
+<h1>Leadlist Tools</h1>
+<p class="subtitle">by Sonoria</p>
+
+<div class="tabs">
+  <button class="tab-btn active" data-tab="combine">Combiner</button>
+  <button class="tab-btn" data-tab="icebreaker">Icebreakers</button>
+  <button class="tab-btn" data-tab="filter">Filtrer</button>
+  <button class="tab-btn" data-tab="database">Base de données</button>
+</div>
+
+<!-- ===================== TAB: COMBINE ===================== -->
+<div class="tab-panel active" id="tab-combine">
+  <div class="card">
+    <div class="dropzone" id="combineDropzone">
+      <input type="file" id="combineFileInput" multiple accept=".csv,.xlsx,.xls">
+      <div class="icon">📂</div>
+      <p><strong>Clique ou glisse tes fichiers ici</strong></p>
+      <p class="hint">CSV, XLSX, XLS — minimum 2 fichiers</p>
+    </div>
+
+    <div class="file-list" id="combineFileList"></div>
+    <div class="warn" id="combineWarn" style="display:none">Ajoute au moins 2 fichiers pour continuer.</div>
+
+    <label class="checkbox-row" style="display:flex;align-items:center;gap:10px;margin-top:16px;cursor:pointer;">
+      <input type="checkbox" id="combineFilterDb" style="accent-color:#6c63ff;width:16px;height:16px;">
+      <span style="font-size:0.85rem;color:#aaa;">Exclure les contacts déjà dans ma base de données</span>
+    </label>
+
+    <button class="btn-primary" id="combineBtn" disabled>Combiner</button>
+
+    <div id="combineResults" style="display:none; margin-top:24px;">
+      <div class="stats-grid" id="cStatsGrid">
+        <div class="stat-box"><div class="stat-num" id="cStatBefore">—</div><div class="stat-label">Contacts avant</div></div>
+        <div class="stat-box"><div class="stat-num" id="cStatDupes" style="color:#e08855">—</div><div class="stat-label">Doublons retirés</div></div>
+        <div class="stat-box" id="cStatDbBox" style="display:none"><div class="stat-num" id="cStatDb" style="color:#e05555">—</div><div class="stat-label">Déjà contactés</div></div>
+        <div class="stat-box"><div class="stat-num" id="cStatAfter">—</div><div class="stat-label">Contacts uniques</div></div>
+      </div>
+      <div class="file-stats"><table><thead><tr><th>Fichier</th><th style="text-align:right">Lignes</th><th style="text-align:right">Colonnes</th></tr></thead><tbody id="cFileStatsBody"></tbody></table></div>
+      <button class="btn-green" id="combineDownloadBtn">⬇ Télécharger le CSV combiné</button>
+    </div>
+
+    <div class="error-box" id="combineError" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ===================== TAB: ICEBREAKER ===================== -->
+<div class="tab-panel" id="tab-icebreaker">
+  <div class="card">
+
+    <div class="field">
+      <label>Clé API Anthropic</label>
+      <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off">
+      <div class="api-hint">
+        Crée ta clé sur <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>.
+        Elle n'est jamais envoyée ailleurs que directement à l'API Anthropic.
+        Coût estimé: ~$0.002 USD par prospect (Claude Haiku). Si le fichier contient déjà des icebreakers, ils sont conservés — seules les accroches conformité sont générées.
+      </div>
+    </div>
+
+    <div class="dropzone" id="iceDropzone">
+      <input type="file" id="iceFileInput" accept=".csv,.xlsx,.xls">
+      <div class="icon">📄</div>
+      <p><strong>Clique ou glisse ton fichier prospects</strong></p>
+      <p class="hint">CSV ou Excel — doit contenir une colonne site web et le nom de l'entreprise</p>
+    </div>
+
+    <div class="file-list" id="iceFileList"></div>
+
+    <div class="field" style="margin-top:16px;">
+      <label>Limiter à N prospects <span style="color:#555;font-weight:400">(optionnel — laisser vide pour tous)</span></label>
+      <input type="number" id="limitInput" placeholder="ex: 15" min="1" style="width:160px;">
+    </div>
+
+    <div class="field" style="margin-top:12px;display:flex;align-items:center;gap:10px;">
+      <input type="checkbox" id="batchMode" style="width:16px;height:16px;cursor:pointer;">
+      <label for="batchMode" style="cursor:pointer;font-weight:500;">Mode Batch <span style="color:#888;font-weight:400">(50% moins cher — résultats en quelques heures, pas en temps réel)</span></label>
+    </div>
+
+    <button class="btn-primary" id="iceBtn" disabled>Générer les icebreakers</button>
+
+    <!-- Progress -->
+    <div class="progress-section" id="iceProgress" style="display:none">
+      <div class="progress-header">
+        <span class="prog-label" id="progLabel">Initialisation...</span>
+        <span class="prog-count" id="progCount">0 / 0</span>
+      </div>
+      <div class="progress-bar-track"><div class="progress-bar-fill" id="progBar"></div></div>
+
+      <div class="results-table-wrap">
+        <table class="results-table">
+          <thead><tr><th>Entreprise</th><th>Statut</th><th>Icebreaker</th><th>Accroche conf.</th><th>Secteur</th><th>Corps email</th></tr></thead>
+          <tbody id="iceResultsBody"></tbody>
+        </table>
+      </div>
+
+      <button class="btn-green" id="iceDownloadBtn" style="display:none">⬇ Télécharger le CSV avec icebreakers</button>
+    </div>
+
+    <div class="error-box" id="iceError" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ===================== TAB: FILTER ===================== -->
+<div class="tab-panel" id="tab-filter">
+  <div class="card">
+    <p style="color:#aaa;font-size:0.85rem;margin-bottom:20px;">Upload une liste et retire automatiquement les contacts déjà présents dans ta base de données (contactés + liste noire).</p>
+
+    <div class="dropzone" id="filterDropzone">
+      <input type="file" id="filterFileInput" accept=".csv,.xlsx,.xls">
+      <div class="icon">📄</div>
+      <p><strong>Clique ou glisse ton fichier ici</strong></p>
+      <p class="hint">CSV ou Excel</p>
+    </div>
+
+    <div class="file-list" id="filterFileList"></div>
+
+    <button class="btn-primary" id="filterBtn" disabled>Filtrer les contacts déjà approchés</button>
+
+    <div id="filterResults" style="display:none;margin-top:24px;">
+      <div class="stats-grid">
+        <div class="stat-box"><div class="stat-num" id="fStatBefore">—</div><div class="stat-label">Contacts avant</div></div>
+        <div class="stat-box"><div class="stat-num" id="fStatRemoved" style="color:#e08855">—</div><div class="stat-label">Retirés</div></div>
+        <div class="stat-box"><div class="stat-num" id="fStatAfter">—</div><div class="stat-label">Nouveaux leads</div></div>
+      </div>
+      <button class="btn-green" id="filterDownloadBtn">⬇ Télécharger les nouveaux leads</button>
+    </div>
+
+    <div class="error-box" id="filterError" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ===================== TAB: DATABASE ===================== -->
+<div class="tab-panel" id="tab-database">
+  <div class="card">
+
+    <!-- Stats -->
+    <div class="stats-grid" style="grid-template-columns:repeat(2,1fr);margin-bottom:24px;">
+      <div class="stat-box">
+        <div class="stat-num" id="dbStatContacted">—</div>
+        <div class="stat-label">Déjà contactés</div>
+        <div style="font-size:0.7rem;color:#555;margin-top:4px;" id="dbStatContactedLast"></div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-num" style="color:#e05555" id="dbStatBlacklist">—</div>
+        <div class="stat-label">Liste noire</div>
+        <div style="font-size:0.7rem;color:#555;margin-top:4px;" id="dbStatBlacklistLast"></div>
+      </div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #2a2a38;margin-bottom:24px;">
+
+    <!-- Add to contacted -->
+    <p style="color:#ccc;font-size:0.85rem;font-weight:600;margin-bottom:12px;">Ajouter à la liste des contactés</p>
+    <div class="dropzone" id="dbDropzone">
+      <input type="file" id="dbFileInput" multiple accept=".csv,.xlsx,.xls">
+      <div class="icon">📂</div>
+      <p><strong>Clique ou glisse tes fichiers ici</strong></p>
+      <p class="hint">CSV, XLSX, XLS — un ou plusieurs fichiers</p>
+    </div>
+    <div class="file-list" id="dbFileList"></div>
+    <div class="field" style="margin-top:14px;">
+      <label>Nom de la liste</label>
+      <input type="text" id="dbListName" placeholder="ex: Campagne Québec avril 2026">
+    </div>
+    <button class="btn-primary" id="dbAddBtn" disabled>Ajouter à la base de données</button>
+    <div id="dbAddResults" style="display:none;margin-top:16px;">
+      <div class="stats-grid" style="grid-template-columns:repeat(2,1fr);">
+        <div class="stat-box"><div class="stat-num" style="color:#1db954" id="dbResAdded">—</div><div class="stat-label">Nouveaux ajoutés</div></div>
+        <div class="stat-box"><div class="stat-num" style="color:#888" id="dbResSkipped">—</div><div class="stat-label">Déjà présents</div></div>
+      </div>
+    </div>
+
+    <!-- Contacted lists -->
+    <div id="dbContactedListsSection" style="margin-top:20px;display:none;">
+      <p style="color:#666;font-size:0.75rem;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:10px;">Listes enregistrées</p>
+      <div id="dbContactedListsTable"></div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #2a2a38;margin:24px 0;">
+
+    <!-- Add to blacklist -->
+    <p style="color:#ccc;font-size:0.85rem;font-weight:600;margin-bottom:4px;">Ajouter à la liste noire</p>
+    <p style="color:#777;font-size:0.78rem;margin-bottom:12px;">Ces contacts seront toujours exclus lors du filtrage, même dans les nouvelles listes.</p>
+    <div class="dropzone" id="blDropzone">
+      <input type="file" id="blFileInput" multiple accept=".csv,.xlsx,.xls">
+      <div class="icon">🚫</div>
+      <p><strong>Clique ou glisse tes fichiers ici</strong></p>
+      <p class="hint">CSV, XLSX, XLS</p>
+    </div>
+    <div class="file-list" id="blFileList"></div>
+    <div class="field" style="margin-top:14px;">
+      <label>Nom de la liste</label>
+      <input type="text" id="blListName" placeholder="ex: Refus campagne mars 2026">
+    </div>
+    <button class="btn-primary" id="blAddBtn" disabled style="background:#8b3333;">Ajouter à la liste noire</button>
+    <div id="blAddResults" style="display:none;margin-top:16px;">
+      <div class="stats-grid" style="grid-template-columns:repeat(2,1fr);">
+        <div class="stat-box"><div class="stat-num" style="color:#e05555" id="blResAdded">—</div><div class="stat-label">Ajoutés à la liste noire</div></div>
+        <div class="stat-box"><div class="stat-num" style="color:#888" id="blResSkipped">—</div><div class="stat-label">Déjà présents</div></div>
+      </div>
+    </div>
+
+    <!-- Blacklist lists -->
+    <div id="dbBlacklistSection" style="margin-top:20px;display:none;">
+      <p style="color:#666;font-size:0.75rem;font-weight:600;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:10px;">Listes enregistrées</p>
+      <div id="dbBlacklistTable"></div>
+    </div>
+
+    <div class="error-box" id="dbError" style="display:none;margin-top:16px;"></div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// Tab switching
+// ============================================================
+function loadDbStats() {
+  fetch('/db/stats').then(r => r.json()).then(d => {
+    document.getElementById('dbStatContacted').textContent = d.contacted_total.toLocaleString('fr-CA');
+    document.getElementById('dbStatBlacklist').textContent = d.blacklist_total.toLocaleString('fr-CA');
+    document.getElementById('dbStatContactedLast').textContent = d.contacted_last ? 'Mis à jour ' + d.contacted_last.substring(0,10) : '';
+    document.getElementById('dbStatBlacklistLast').textContent = d.blacklist_last ? 'Mis à jour ' + d.blacklist_last.substring(0,10) : '';
+  }).catch(() => {});
+}
+
+document.querySelectorAll('.tab-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    document.getElementById('tab-' + btn.dataset.tab).classList.add('active');
+    if (btn.dataset.tab === 'database') { loadDbStats(); loadLists(); }
+  });
+});
+
+// ============================================================
+// COMBINE TAB
+// ============================================================
+const combineDropzone = document.getElementById('combineDropzone');
+const combineFileInput = document.getElementById('combineFileInput');
+const combineFileList = document.getElementById('combineFileList');
+const combineBtn = document.getElementById('combineBtn');
+const combineResults = document.getElementById('combineResults');
+const combineError = document.getElementById('combineError');
+const combineWarn = document.getElementById('combineWarn');
+const combineDownloadBtn = document.getElementById('combineDownloadBtn');
+let combineFiles = [];
+let combineCsv = null;
+
+combineDropzone.addEventListener('dragover', e => { e.preventDefault(); combineDropzone.classList.add('drag-over'); });
+combineDropzone.addEventListener('dragleave', () => combineDropzone.classList.remove('drag-over'));
+combineDropzone.addEventListener('drop', e => { e.preventDefault(); combineDropzone.classList.remove('drag-over'); addCombineFiles(Array.from(e.dataTransfer.files)); });
+combineFileInput.addEventListener('change', () => { addCombineFiles(Array.from(combineFileInput.files)); combineFileInput.value = ''; });
+
+function addCombineFiles(files) {
+  files.forEach(f => { if (!combineFiles.find(x => x.name === f.name && x.size === f.size)) combineFiles.push(f); });
+  renderCombineFiles();
+}
+
+function renderCombineFiles() {
+  combineFileList.innerHTML = '';
+  combineFiles.forEach((f, i) => {
+    const item = document.createElement('div');
+    item.className = 'file-item';
+    item.innerHTML = `<span class="file-name">📄 ${f.name}</span><button class="remove-btn" data-i="${i}">✕</button>`;
+    combineFileList.appendChild(item);
+  });
+  combineFileList.querySelectorAll('.remove-btn').forEach(btn => {
+    btn.addEventListener('click', () => { combineFiles.splice(parseInt(btn.dataset.i), 1); renderCombineFiles(); });
+  });
+  combineBtn.disabled = combineFiles.length < 2;
+  combineWarn.style.display = combineFiles.length === 1 ? 'block' : 'none';
+  combineResults.style.display = 'none';
+  combineError.style.display = 'none';
+  combineCsv = null;
+}
+
+combineBtn.addEventListener('click', async () => {
+  if (combineFiles.length < 2) return;
+  combineBtn.disabled = true;
+  combineBtn.innerHTML = '<span class="spinner"></span>Traitement...';
+  combineResults.style.display = 'none';
+  combineError.style.display = 'none';
+
+  const fd = new FormData();
+  combineFiles.forEach(f => fd.append('files', f));
+  if (document.getElementById('combineFilterDb').checked) fd.append('filter_db', 'true');
+
+  try {
+    const res = await fetch('/combine', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
+
+    const s = data.stats;
+    document.getElementById('cStatBefore').textContent = s.total_before.toLocaleString('fr-CA');
+    document.getElementById('cStatDupes').textContent = s.duplicates_removed.toLocaleString('fr-CA');
+    document.getElementById('cStatAfter').textContent = s.total_after.toLocaleString('fr-CA');
+    const dbBox = document.getElementById('cStatDbBox');
+    if (s.db_removed > 0) {
+      document.getElementById('cStatDb').textContent = s.db_removed.toLocaleString('fr-CA');
+      dbBox.style.display = 'block';
+      document.getElementById('cStatsGrid').style.gridTemplateColumns = 'repeat(2, 1fr)';
+    } else {
+      dbBox.style.display = 'none';
+      document.getElementById('cStatsGrid').style.gridTemplateColumns = 'repeat(3, 1fr)';
+    }
+
+    const tbody = document.getElementById('cFileStatsBody');
+    tbody.innerHTML = '';
+    s.files.forEach(f => {
+      tbody.innerHTML += `<tr><td>${f.filename}</td><td style="text-align:right">${f.rows.toLocaleString('fr-CA')}</td><td style="text-align:right">${f.columns_mapped}</td></tr>`;
+    });
+
+    combineCsv = data.csv;
+    combineResults.style.display = 'block';
+  } catch(e) {
+    combineError.textContent = '❌ ' + e.message;
+    combineError.style.display = 'block';
+  }
+
+  combineBtn.innerHTML = 'Combiner';
+  combineBtn.disabled = false;
+});
+
+combineDownloadBtn.addEventListener('click', () => {
+  if (!combineCsv) return;
+  const blob = new Blob(['\uFEFF' + combineCsv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'leadlist_combined.csv';
+  a.click();
+});
+
+// ============================================================
+// ICEBREAKER TAB
+// ============================================================
+const iceDropzone = document.getElementById('iceDropzone');
+const iceFileInput = document.getElementById('iceFileInput');
+const iceFileList = document.getElementById('iceFileList');
+const iceBtn = document.getElementById('iceBtn');
+const iceProgress = document.getElementById('iceProgress');
+const iceError = document.getElementById('iceError');
+const iceDownloadBtn = document.getElementById('iceDownloadBtn');
+const apiKeyInput = document.getElementById('apiKeyInput');
+let iceFile = null;
+let currentJobId = null;
+
+// Restore API key from localStorage
+apiKeyInput.value = localStorage.getItem('sonoria_api_key') || '';
+apiKeyInput.addEventListener('input', () => localStorage.setItem('sonoria_api_key', apiKeyInput.value));
+
+function checkIceBtn() {
+  iceBtn.disabled = !(iceFile && apiKeyInput.value.trim().startsWith('sk-'));
+}
+
+apiKeyInput.addEventListener('input', checkIceBtn);
+
+iceDropzone.addEventListener('dragover', e => { e.preventDefault(); iceDropzone.classList.add('drag-over'); });
+iceDropzone.addEventListener('dragleave', () => iceDropzone.classList.remove('drag-over'));
+iceDropzone.addEventListener('drop', e => {
+  e.preventDefault(); iceDropzone.classList.remove('drag-over');
+  const files = Array.from(e.dataTransfer.files);
+  if (files.length) setIceFile(files[0]);
+});
+iceFileInput.addEventListener('change', () => { if (iceFileInput.files[0]) setIceFile(iceFileInput.files[0]); iceFileInput.value = ''; });
+
+function setIceFile(f) {
+  iceFile = f;
+  iceFileList.innerHTML = `<div class="file-item"><span class="file-name">📄 ${f.name}</span><button class="remove-btn" id="iceRemoveBtn">✕</button></div>`;
+  document.getElementById('iceRemoveBtn').addEventListener('click', () => {
+    iceFile = null; iceFileList.innerHTML = ''; checkIceBtn();
+    iceProgress.style.display = 'none'; iceError.style.display = 'none';
+  });
+  checkIceBtn();
+}
+
+iceBtn.addEventListener('click', async () => {
+  if (!iceFile || !apiKeyInput.value.trim()) return;
+
+  iceBtn.disabled = true;
+  iceBtn.innerHTML = '<span class="spinner"></span>Démarrage...';
+  iceError.style.display = 'none';
+  iceProgress.style.display = 'block';
+  iceDownloadBtn.style.display = 'none';
+  document.getElementById('iceResultsBody').innerHTML = '';
+  document.getElementById('progBar').style.width = '0%';
+  document.getElementById('progLabel').textContent = 'Initialisation...';
+  document.getElementById('progCount').textContent = '';
+
+  const fd = new FormData();
+  fd.append('file', iceFile);
+  fd.append('api_key', apiKeyInput.value.trim());
+  const limit = document.getElementById('limitInput').value.trim();
+  if (limit) fd.append('limit', limit);
+  if (document.getElementById('batchMode').checked) fd.append('mode', 'batch');
+
+  try {
+    const res = await fetch('/icebreaker/start', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
+
+    currentJobId = data.job_id;
+    const total = data.total;
+    listenToJob(currentJobId, total);
+  } catch(e) {
+    iceError.textContent = '❌ ' + e.message;
+    iceError.style.display = 'block';
+    iceBtn.innerHTML = 'Générer les icebreakers';
+    iceBtn.disabled = false;
+  }
+});
+
+const rowMap = {};
+
+function listenToJob(jobId, total) {
+  const es = new EventSource(`/icebreaker/stream/${jobId}`);
+
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+
+    if (ev.type === 'progress') {
+      const st = ev.data.status;
+      const pct = Math.round((ev.data.i / total) * 100);
+      document.getElementById('progBar').style.width = pct + '%';
+      if (st === 'batch_submitting') {
+        document.getElementById('progLabel').textContent = 'Envoi du batch à Anthropic...';
+        document.getElementById('progCount').textContent = `${total} requêtes`;
+      } else if (st === 'batch_waiting') {
+        const done = ev.data.batch_done || 0;
+        document.getElementById('progLabel').textContent = `Batch en traitement chez Anthropic — ${done}/${total} complétés`;
+        document.getElementById('progCount').textContent = `${done} / ${total}`;
+        document.getElementById('progBar').style.width = Math.round(done / total * 100) + '%';
+      } else {
+        document.getElementById('progCount').textContent = st === 'scraping' ? '' : `${ev.data.i + 1} / ${total}`;
+        document.getElementById('progLabel').textContent = st === 'scraping'
+          ? `Scraping des sites web en parallèle (${total} prospects)...`
+          : st === 'generating' && !ev.data.company
+          ? `Génération des icebreakers en parallèle...`
+          : st === 'classifying' || st === 'generating'
+          ? `${st === 'classifying' ? 'Classification' : 'Génération'}: ${ev.data.company}`
+          : ev.data.company;
+      }
+
+      const badge = ev.data.status === 'scraping'
+        ? '<span class="badge badge-scraping">Scraping...</span>'
+        : ev.data.status === 'preserved'
+        ? '<span class="badge badge-preserved">Conservé</span>'
+        : '<span class="badge badge-generating">Génération...</span>';
+
+      if (!rowMap[ev.data.i]) {
+        const tr = document.createElement('tr');
+        tr.id = `ice-row-${ev.data.i}`;
+        tr.innerHTML = `<td>${ev.data.company}</td><td class="status-cell">${badge}</td><td class="icebreaker-cell">—</td><td class="accroche-cell">—</td><td class="secteur-cell">—</td><td class="corps-cell">—</td>`;
+        document.getElementById('iceResultsBody').prepend(tr);
+        rowMap[ev.data.i] = tr;
+      } else {
+        rowMap[ev.data.i].querySelector('.status-cell').innerHTML = badge;
+      }
+    }
+
+    if (ev.type === 'result') {
+      const isError = ev.data.icebreaker.startsWith('[Erreur');
+      const badge = isError
+        ? '<span class="badge badge-error">Erreur</span>'
+        : '<span class="badge badge-done">✓</span>';
+      if (rowMap[ev.data.i]) {
+        rowMap[ev.data.i].querySelector('.status-cell').innerHTML = badge;
+        rowMap[ev.data.i].querySelector('.icebreaker-cell').textContent = ev.data.icebreaker;
+        rowMap[ev.data.i].querySelector('.accroche-cell').textContent = ev.data.accroche_conformite || '';
+        const secteurCell = rowMap[ev.data.i].querySelector('.secteur-cell');
+        secteurCell.textContent = ev.data.secteur || '';
+        secteurCell.classList.toggle('hors-cible', ev.data.secteur === 'hors_cible');
+        rowMap[ev.data.i].querySelector('.corps-cell').textContent = ev.data.corps_email || '';
+      }
+    }
+
+    if (ev.type === 'done') {
+      document.getElementById('progBar').style.width = '100%';
+      const excl = ev.data.excluded > 0 ? ` (${ev.data.excluded} hors cible exclus)` : '';
+      document.getElementById('progLabel').textContent = `Terminé — ${ev.data.total} prospects exportés${excl}`;
+      document.getElementById('progCount').textContent = `${ev.data.total} / ${ev.data.total}`;
+      iceDownloadBtn.style.display = 'block';
+      iceBtn.innerHTML = 'Générer les icebreakers';
+      iceBtn.disabled = false;
+      es.close();
+    }
+
+    if (ev.type === 'error') {
+      iceError.textContent = '❌ ' + ev.data;
+      iceError.style.display = 'block';
+      iceBtn.innerHTML = 'Générer les icebreakers';
+      iceBtn.disabled = false;
+      es.close();
+    }
+  };
+
+  es.onerror = () => {
+    // SSE closed normally after done event
+    es.close();
+  };
+}
+
+iceDownloadBtn.addEventListener('click', () => {
+  if (!currentJobId) return;
+  window.location = `/icebreaker/download/${currentJobId}`;
+});
+
+// ============================================================
+// FILTER TAB
+// ============================================================
+const filterDropzone = document.getElementById('filterDropzone');
+const filterFileInput = document.getElementById('filterFileInput');
+const filterFileList = document.getElementById('filterFileList');
+const filterBtn = document.getElementById('filterBtn');
+const filterResults = document.getElementById('filterResults');
+const filterError = document.getElementById('filterError');
+const filterDownloadBtn = document.getElementById('filterDownloadBtn');
+let filterFile = null;
+let filterCsv = null;
+
+filterDropzone.addEventListener('dragover', e => { e.preventDefault(); filterDropzone.classList.add('drag-over'); });
+filterDropzone.addEventListener('dragleave', () => filterDropzone.classList.remove('drag-over'));
+filterDropzone.addEventListener('drop', e => { e.preventDefault(); filterDropzone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) setFilterFile(e.dataTransfer.files[0]); });
+filterFileInput.addEventListener('change', () => { if (filterFileInput.files[0]) setFilterFile(filterFileInput.files[0]); filterFileInput.value = ''; });
+
+function setFilterFile(f) {
+  filterFile = f;
+  filterFileList.innerHTML = `<div class="file-item"><span class="file-name">📄 ${f.name}</span><button class="remove-btn" id="filterRemoveBtn">✕</button></div>`;
+  document.getElementById('filterRemoveBtn').addEventListener('click', () => { filterFile = null; filterFileList.innerHTML = ''; filterBtn.disabled = true; filterResults.style.display = 'none'; });
+  filterBtn.disabled = false;
+}
+
+filterBtn.addEventListener('click', async () => {
+  if (!filterFile) return;
+  filterBtn.disabled = true;
+  filterBtn.innerHTML = '<span class="spinner"></span>Filtrage...';
+  filterResults.style.display = 'none';
+  filterError.style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('file', filterFile);
+
+  try {
+    const res = await fetch('/db/filter', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
+
+    document.getElementById('fStatBefore').textContent = data.before.toLocaleString('fr-CA');
+    document.getElementById('fStatRemoved').textContent = data.removed.toLocaleString('fr-CA');
+    document.getElementById('fStatAfter').textContent = data.after.toLocaleString('fr-CA');
+    filterCsv = data.csv;
+    filterResults.style.display = 'block';
+  } catch(e) {
+    filterError.textContent = '❌ ' + e.message;
+    filterError.style.display = 'block';
+  }
+
+  filterBtn.innerHTML = 'Filtrer les contacts déjà approchés';
+  filterBtn.disabled = false;
+});
+
+filterDownloadBtn.addEventListener('click', () => {
+  if (!filterCsv) return;
+  const blob = new Blob(['\uFEFF' + filterCsv], { type: 'text/csv;charset=utf-8;' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'leads_nouveaux.csv';
+  a.click();
+});
+
+// ============================================================
+// DATABASE TAB
+// ============================================================
+function renderLists(lists, tableContainerId, sectionId) {
+  const section = document.getElementById(sectionId);
+  const container = document.getElementById(tableContainerId);
+  if (!lists.length) { section.style.display = 'none'; return; }
+  section.style.display = 'block';
+
+  let html = '<table class="lists-table"><thead><tr><th>Nom</th><th>Date</th><th style="text-align:center">Leads</th><th></th></tr></thead><tbody>';
+  lists.forEach(l => {
+    html += `<tr data-list-id="${l.id}">
+      <td><span class="list-name-display" title="Cliquer pour renommer">${l.name}</span><input class="list-name-input" style="display:none" value="${l.name.replace(/"/g,'&quot;')}"></td>
+      <td style="color:#666;white-space:nowrap">${l.date}</td>
+      <td style="text-align:center;color:#aaa">${l.count.toLocaleString('fr-CA')}</td>
+      <td style="text-align:right;white-space:nowrap">
+        <a href="/db/lists/${l.id}/download" class="btn-dl">⬇ CSV</a>
+        <button class="btn-delete-list" data-list-id="${l.id}" data-list-name="${l.name.replace(/"/g,'&quot;')}" title="Supprimer cette liste">✕</button>
+      </td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  container.innerHTML = html;
+
+  container.querySelectorAll('tr[data-list-id]').forEach(tr => {
+    const listId = tr.dataset.listId;
+    const display = tr.querySelector('.list-name-display');
+    const input   = tr.querySelector('.list-name-input');
+
+    display.addEventListener('click', () => { display.style.display = 'none'; input.style.display = 'block'; input.focus(); input.select(); });
+
+    async function saveRename() {
+      const name = input.value.trim();
+      display.style.display = 'inline'; input.style.display = 'none';
+      if (!name || name === display.textContent) return;
+      try {
+        await fetch(`/db/lists/${listId}/rename`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({name}) });
+        display.textContent = name;
+      } catch(e) {}
+    }
+    input.addEventListener('blur', saveRename);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') input.blur(); if (e.key === 'Escape') { input.value = display.textContent; input.blur(); } });
+
+    const delBtn = tr.querySelector('.btn-delete-list');
+    delBtn.addEventListener('click', async () => {
+      const name = delBtn.dataset.listName;
+      if (!confirm(`Supprimer la liste "${name}" et tous ses leads de la base de données ?`)) return;
+      delBtn.disabled = true;
+      try {
+        const res = await fetch(`/db/lists/${listId}/delete`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
+        document.getElementById('dbStatContacted').textContent = data.contacted_total.toLocaleString('fr-CA');
+        document.getElementById('dbStatBlacklist').textContent = data.blacklist_total.toLocaleString('fr-CA');
+        loadLists();
+      } catch(e) {
+        alert('Erreur : ' + e.message);
+        delBtn.disabled = false;
+      }
+    });
+  });
+}
+
+function loadLists() {
+  fetch('/db/lists?table=contacted_leads').then(r => r.json()).then(l => renderLists(l, 'dbContactedListsTable', 'dbContactedListsSection'));
+  fetch('/db/lists?table=blacklist').then(r => r.json()).then(l => renderLists(l, 'dbBlacklistTable', 'dbBlacklistSection'));
+}
+
+function makeDbUploader({ dropzoneId, inputId, fileListId, btnId, resultsId, addedId, skippedId, errorId, nameInputId, table, btnLabel }) {
+  const dropzone  = document.getElementById(dropzoneId);
+  const fileInput = document.getElementById(inputId);
+  const fileList  = document.getElementById(fileListId);
+  const btn       = document.getElementById(btnId);
+  const results   = document.getElementById(resultsId);
+  const dbError   = document.getElementById(errorId);
+  const nameInput = document.getElementById(nameInputId);
+  let files = [];
+
+  dropzone.addEventListener('dragover', e => { e.preventDefault(); dropzone.classList.add('drag-over'); });
+  dropzone.addEventListener('dragleave', () => dropzone.classList.remove('drag-over'));
+  dropzone.addEventListener('drop', e => { e.preventDefault(); dropzone.classList.remove('drag-over'); addFiles(Array.from(e.dataTransfer.files)); });
+  fileInput.addEventListener('change', () => { addFiles(Array.from(fileInput.files)); fileInput.value = ''; });
+
+  function addFiles(newFiles) {
+    newFiles.forEach(f => { if (!files.find(x => x.name === f.name && x.size === f.size)) files.push(f); });
+    render();
+  }
+
+  function render() {
+    fileList.innerHTML = '';
+    files.forEach((f, i) => {
+      const item = document.createElement('div');
+      item.className = 'file-item';
+      item.innerHTML = `<span class="file-name">📄 ${f.name}</span><button class="remove-btn" data-i="${i}">✕</button>`;
+      fileList.appendChild(item);
+    });
+    fileList.querySelectorAll('.remove-btn').forEach(b => b.addEventListener('click', () => { files.splice(parseInt(b.dataset.i), 1); render(); }));
+    btn.disabled = files.length === 0;
+    results.style.display = 'none';
+  }
+
+  btn.addEventListener('click', async () => {
+    if (!files.length) return;
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>Ajout en cours...';
+    results.style.display = 'none';
+    dbError.style.display = 'none';
+
+    const fd = new FormData();
+    files.forEach(f => fd.append('files', f));
+    fd.append('table', table);
+    fd.append('list_name', nameInput ? nameInput.value.trim() : '');
+
+    try {
+      const res = await fetch('/db/add', { method: 'POST', body: fd });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
+      document.getElementById(addedId).textContent = data.added.toLocaleString('fr-CA');
+      document.getElementById(skippedId).textContent = data.skipped.toLocaleString('fr-CA');
+      results.style.display = 'block';
+      if (nameInput) nameInput.value = '';
+      loadDbStats();
+      loadLists();
+    } catch(e) {
+      dbError.textContent = '❌ ' + e.message;
+      dbError.style.display = 'block';
+    }
+
+    btn.innerHTML = btnLabel || 'Ajouter';
+    btn.disabled = false;
+  });
+}
+
+makeDbUploader({
+  dropzoneId: 'dbDropzone', inputId: 'dbFileInput', fileListId: 'dbFileList',
+  btnId: 'dbAddBtn', resultsId: 'dbAddResults', addedId: 'dbResAdded', skippedId: 'dbResSkipped',
+  errorId: 'dbError', nameInputId: 'dbListName', table: 'contacted_leads',
+  btnLabel: 'Ajouter à la base de données',
+});
+
+makeDbUploader({
+  dropzoneId: 'blDropzone', inputId: 'blFileInput', fileListId: 'blFileList',
+  btnId: 'blAddBtn', resultsId: 'blAddResults', addedId: 'blResAdded', skippedId: 'blResSkipped',
+  errorId: 'dbError', nameInputId: 'blListName', table: 'blacklist',
+  btnLabel: 'Ajouter à la liste noire',
+});
+</script>
+</body>
+</html>

@@ -266,8 +266,8 @@
       <div style="flex:1;">
         <label>Type d'accroche</label>
         <div class="type-toggle" id="typeToggle">
-          <button class="type-btn active" data-type="conformites">Conformités<span class="type-hint">IA — détecte secteur + norme (~$0.003/prospect)</span></button>
-          <button class="type-btn" data-type="procedures">Procédures<span class="type-hint">Gratuit — règles sur le titre de poste, instantané</span></button>
+          <button class="type-btn" data-type="conformites">Conformités<span class="type-hint">IA — détecte secteur + norme (~$0.003/prospect)</span></button>
+          <button class="type-btn active" data-type="procedures">Procédures<span class="type-hint">Gratuit — règles sur le titre de poste, instantané</span></button>
         </div>
       </div>
       <div style="flex:0 0 auto;">
@@ -303,7 +303,7 @@
       <input type="number" id="limitInput" placeholder="ex: 15" min="1" style="width:160px;">
     </div>
 
-    <div id="batchModeField" style="margin-top:12px;display:flex;align-items:center;gap:10px;">
+    <div id="batchModeField" style="margin-top:12px;display:none;align-items:center;gap:10px;">
       <input type="checkbox" id="batchMode" style="width:16px;height:16px;cursor:pointer;">
       <label for="batchMode" style="cursor:pointer;font-weight:500;font-size:0.85rem;">Mode Batch <span style="color:#888;font-weight:400">(50% moins cher — résultats en quelques heures, pas en temps réel)</span></label>
     </div>
@@ -576,7 +576,7 @@ const iceDownloadBtn = document.getElementById('iceDownloadBtn');
 const apiKeyInput = document.getElementById('apiKeyInput');
 let iceFile = null;
 let currentJobId = null;
-let currentIceType = 'conformites';
+let currentIceType = 'procedures';
 
 let currentLang = 'fr';
 document.querySelectorAll('.lang-btn').forEach(btn => {

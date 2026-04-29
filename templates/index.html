@@ -577,6 +577,8 @@ const apiKeyInput = document.getElementById('apiKeyInput');
 let iceFile = null;
 let currentJobId = null;
 let currentIceType = 'procedures';
+// Applique l'état initial du tableau selon le type par défaut
+document.querySelector('.results-table').classList.toggle('mode-proc', currentIceType === 'procedures');
 
 let currentLang = 'fr';
 document.querySelectorAll('.lang-btn').forEach(btn => {

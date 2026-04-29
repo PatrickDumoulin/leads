@@ -1593,6 +1593,13 @@ def db_filter_route():
 
 @app.route('/icebreaker/start', methods=['POST'])
 def icebreaker_start():
+    try:
+        return _icebreaker_start_inner()
+    except Exception as e:
+        return jsonify({'error': f'Erreur serveur: {str(e)}'}), 500
+
+
+def _icebreaker_start_inner():
     api_key = request.form.get('api_key', '').strip()
     if not api_key:
         return jsonify({'error': 'Clé API Anthropic requise.'}), 400

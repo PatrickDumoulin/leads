@@ -66,7 +66,7 @@ _LOGIN_HTML = '''<!DOCTYPE html>
 
 @app.before_request
 def check_auth():
-    if request.endpoint in ('login', 'static'):
+    if request.endpoint in ('login', 'static', 'deploy_webhook'):
         return
     if not session.get('authenticated'):
         return redirect('/login')
@@ -454,6 +454,26 @@ RÈGLES:
 - INTERDIT: virgule après "Très intéressant", points-virgules, parenthèses, "innovant", "vision", "expertise", "passionné", "fier"
 - Retourne UNIQUEMENT cette phrase, rien d'autre"""
 
+SYSTEM_PROMPT_EN = """You are a B2B copywriting expert writing icebreakers for cold email prospecting.
+
+Goal: make the recipient believe the sender genuinely visited their website and did real research.
+
+MANDATORY FORMAT — 1 sentence only:
+Always start with "Very interesting" followed WITHOUT a comma by a natural English construction, for example:
+   - "Very interesting that [company] [does something specific]."
+   - "Very interesting how [company] focuses on [specific domain]."
+   - "Very interesting to see [company] [verb + concrete detail]."
+
+RULES:
+- If website content is available, prioritize it. If not, use LinkedIn description, specialties and job title. You ALWAYS generate the sentence regardless of available data. NEVER say you don't have access to the site or that data is insufficient.
+- Be CONCRETE: mention a product, a market served, a technology, a client type, a number, a certification
+- Short sentence, natural tone — as if typed quickly between two meetings
+- ABSOLUTELY FORBIDDEN: em dash (U+2014). Never use it under any circumstance.
+- ABSOLUTELY FORBIDDEN: en dash (U+2013). Never use it.
+- Use only a regular hyphen (-) if you need a dash.
+- FORBIDDEN: comma after "Very interesting", semicolons, parentheses, "innovative", "visionary", "expertise", "passionate", "proud"
+- Return ONLY this sentence, nothing else"""
+
 
 def _s(val):
     """Safely convert any value to a stripped string."""
@@ -514,6 +534,182 @@ def is_bad_role(job_title):
         return False
     t = _normalize_accents(job_title.lower().strip()) + ' '
     return any(x in t for x in _BAD_ROLE_KEYWORDS)
+
+
+# ---------------------------------------------------------------------------
+# Accroche procédures (template rule-based, aucun appel API)
+# ---------------------------------------------------------------------------
+
+_FEM_FIRST_NAMES = frozenset([
+    'marie', 'julie', 'sophie', 'isabelle', 'anne', 'catherine', 'nathalie',
+    'caroline', 'valerie', 'jennifer', 'jessica', 'stephanie', 'amelie',
+    'emilie', 'sarah', 'sara', 'laura', 'lucie', 'claire', 'dominique',
+    'martine', 'sylvie', 'michele', 'helene', 'veronique', 'virginie',
+    'audrey', 'celine', 'nadine', 'patricia', 'karine', 'france', 'francine',
+    'louise', 'monique', 'diane', 'linda', 'manon', 'maude', 'fanny',
+    'genevieve', 'florence', 'alexandra', 'alice', 'charlotte', 'delphine',
+    'elodie', 'francoise', 'gabrielle', 'joelle', 'josee', 'laure',
+    'laurence', 'lea', 'lise', 'magali', 'marianne', 'marine', 'marlene',
+    'mathilde', 'melanie', 'melissa', 'mireille', 'muriel', 'nadia', 'nancy',
+    'noemie', 'olivia', 'pascale', 'pauline', 'rachel', 'renee', 'roxane',
+    'samantha', 'sandrine', 'sonia', 'suzanne', 'vanessa', 'yasmine', 'zoe',
+    'amanda', 'amy', 'ashley', 'carol', 'deborah', 'donna', 'elizabeth',
+    'emma', 'hannah', 'helen', 'jane', 'janet', 'joanna', 'julia', 'karen',
+    'kate', 'katherine', 'kelly', 'kim', 'kimberly', 'lauren', 'leah',
+    'lily', 'lisa', 'margaret', 'mary', 'megan', 'michelle', 'molly',
+    'natalie', 'pamela', 'paula', 'rebecca', 'rose', 'ruth', 'sandra',
+    'sharon', 'susan', 'tamara', 'tanya', 'tara', 'tracy', 'victoria',
+    'brittany', 'heather', 'holly', 'jasmine', 'jenna', 'raef',
+])
+
+_FEM_TITLE_MARKERS = (
+    'directrice', 'presidente', 'vice-presidente', 'dirigeante',
+    'associee', 'fondatrice', 'co-fondatrice', 'pdge',
+)
+
+
+def _is_feminine(job_title, first_name=''):
+    t = _normalize_accents((job_title or '').lower())
+    if any(m in t for m in _FEM_TITLE_MARKERS):
+        return True
+    fn = _normalize_accents((first_name or '').lower().split()[0]) if first_name else ''
+    return fn in _FEM_FIRST_NAMES
+
+
+def _build_accroche_procedures(job_title, first_name='', lang='fr'):
+    t = _normalize_accents((job_title or '').lower()) + ' '
+    if lang == 'en':
+        is_exec = any(x in t for x in (
+            'president', 'ceo ', 'pdg ', 'vp ', 'vice-president', 'vice president',
+            'chief ', 'coo ', 'cfo ', 'proprietaire', 'actionnaire',
+            'associe ', 'associee', 'fondateur', 'fondatrice', 'partner ',
+            'partenaire', 'owner ',
+        ))
+        if is_exec:
+            return ("What led me to reach out: as a leader, you've probably built your company on the expertise of a few key people, "
+                    "but where does that knowledge go if they leave tomorrow?")
+        if any(x in t for x in ('qualite ', 'quality ', 'conformite', 'compliance', ' qa ', ' qc ')):
+            return ("What led me to reach out: as Quality Manager, you know that most non-conformities don't come from lack of skill — "
+                    "they come from information not being in the right place at the right time.")
+        if any(x in t for x in ('ingenierie', 'engineering', 'technique ', 'technical')):
+            return ("What led me to reach out: as Engineering Manager, your best experts probably spend too much time answering "
+                    "the same operational questions instead of solving problems that actually matter.")
+        if any(x in t for x in ('maintenance', 'fiabilite', 'reliability')):
+            return ("What led me to reach out: as Maintenance Manager, you've probably lived this scenario: a line goes down, "
+                    "and the only technician who knows what to do is unreachable.")
+        if any(x in t for x in ('fabrication', 'manufacturing', 'manufactur')):
+            return ("What led me to reach out: as Manufacturing Manager, you've probably noticed that the same procedure is executed "
+                    "differently depending on who's on shift, and nobody really addresses it.")
+        if 'production' in t:
+            return ("What led me to reach out: as Production Manager, you know exactly what it costs when an operator stops their line "
+                    "to find an answer that nobody can locate.")
+        if any(x in t for x in ('amelioration continue', 'lean ', 'excellence operationnelle', 'kaizen', 'continuous improvement')):
+            return ("What led me to reach out: as Continuous Improvement Manager, you know the biggest barrier to performance "
+                    "is rarely the machines — it's know-how that isn't accessible at the right time and place.")
+        if any(x in t for x in ('operation', 'operatrice')):
+            return ("What led me to reach out: as Operations Manager, you see the numbers, but the 5 to 10 hours lost per employee "
+                    "per week searching for information — nobody really measures that.")
+        if any(x in t for x in ('usine', 'plant ')):
+            return ("What led me to reach out: as Plant Manager, you carry a risk few people see: the day your best expert leaves, "
+                    "their knowledge leaves with them.")
+        if any(x in t for x in ('logistique', 'supply chain', 'approvisionnement', 'achats ')):
+            return ("What led me to reach out: as Supply Chain Manager, you know exactly what it costs when a poorly followed procedure "
+                    "slows the entire chain and nobody does it the same way.")
+        if any(x in t for x in ('ressources humaines', 'human resources', ' rh ', 'formation ')):
+            return ("What led me to reach out: as HR Manager in manufacturing, you absorb a cost nobody measures: a senior fully "
+                    "mobilized for 3 to 6 weeks every time someone new joins.")
+        if any(x in t for x in ('directeur', 'directrice', 'director', 'gestionnaire', 'manager ', 'responsable')):
+            return ("What led me to reach out: as a Manager, you probably carry a risk few people in your organization see: "
+                    "the day a key employee leaves, their knowledge leaves with them.")
+        return ("What led me to reach out: as a leader, you've probably built your company on the expertise of a few key people, "
+                "but where does that knowledge go if they leave tomorrow?")
+
+    fem = _is_feminine(job_title, first_name)
+    dir_e = 'directrice' if fem else 'directeur'
+    dirig = 'dirigeante' if fem else 'dirigeant'
+
+    # Senior exec — checked first so VP Manufacturing → dirigeant, pas fabrication
+    is_exec = any(x in t for x in (
+        'president', 'ceo ', 'pdg ', 'vp ', 'vice-president', 'vice president',
+        'chief ', 'coo ', 'cfo ', 'proprietaire', 'actionnaire',
+        'associe ', 'associee', 'fondateur', 'fondatrice', 'partner ',
+        'partenaire', 'owner ',
+    ))
+    if is_exec:
+        return (f"Ce qui m'a amené à vous écrire : En tant que {dirig}, vous avez probablement "
+                "bâti votre entreprise sur le savoir-faire de quelques personnes clés, mais ce "
+                "savoir, il est où si elles partent demain ?")
+
+    # Qualité
+    if any(x in t for x in ('qualite ', 'quality ', 'conformite', 'compliance', ' qa ', ' qc ')):
+        return (f"Ce qui m'a amené à vous écrire : En tant que {dir_e} qualité, vous savez que "
+                "la plupart des non-conformités ne viennent pas d'un manque de compétence, elles "
+                "viennent d'une information qui n'était pas au bon endroit au bon moment.")
+
+    # Ingénierie / Technique
+    if any(x in t for x in ('ingenierie', 'engineering', 'technique ', 'technical')):
+        return (f"Ce qui m'a amené à vous écrire : En tant que {dir_e} d'ingénierie, vos meilleurs "
+                "experts passent probablement trop de temps à répondre aux mêmes questions "
+                "opérationnelles au lieu de résoudre des problèmes qui comptent vraiment.")
+
+    # Maintenance
+    if any(x in t for x in ('maintenance', 'fiabilite', 'reliability')):
+        return (f"Ce qui m'a amené à vous écrire : En tant que {dir_e} maintenance, vous avez "
+                "probablement déjà vécu le scénario : une ligne tombe, et le seul technicien qui "
+                "sait quoi faire est introuvable.")
+
+    # Fabrication / Manufacturing (avant production pour éviter faux-positifs)
+    if any(x in t for x in ('fabrication', 'manufacturing', 'manufactur')):
+        return (f"Ce qui m'a amené à vous écrire : En tant que {dir_e} de fabrication, vous avez "
+                "probablement remarqué que la même procédure est exécutée différemment selon qui "
+                "est en poste, et parfois personne ne s'en préoccupe vraiment.")
+
+    # Production
+    if 'production' in t:
+        return (f"Ce qui m'a amené à vous écrire : En tant que {dir_e} de production, vous savez "
+                "exactement ce que ça coûte quand un opérateur arrête sa ligne pour aller chercher "
+                "une réponse que personne ne trouve.")
+
+    # Amélioration continue / Lean
+    if any(x in t for x in ('amelioration continue', 'lean ', 'excellence operationnelle', 'kaizen')):
+        return ("Ce qui m'a amené à vous écrire : En tant que responsable amélioration continue, "
+                "vous savez que le plus grand frein à la performance c'est rarement les machines, "
+                "c'est le savoir-faire qui n'est pas accessible au bon moment au bon endroit.")
+
+    # Opérations (après fabrication/production)
+    if any(x in t for x in ('operation', 'operatrice')):
+        return (f"Ce qui m'a amené à vous écrire : En tant que {dir_e} des opérations, vous voyez "
+                "les chiffres, mais les 5 à 10 heures perdues par employé par semaine à chercher "
+                "de l'information, personne ne les mesure vraiment.")
+
+    # Usine / Plant
+    if any(x in t for x in ('usine', 'plant ')):
+        return (f"Ce qui m'a amené à vous écrire : En tant que {dir_e} d'usine, vous portez un "
+                "risque que peu de gens voient : le jour où votre meilleur expert part, son savoir "
+                "part avec lui.")
+
+    # Logistique / Supply chain
+    if any(x in t for x in ('logistique', 'supply chain', 'approvisionnement', 'achats ')):
+        return ("Ce qui m'a amené à vous écrire : En tant que responsable logistique, vous savez "
+                "exactement ce que ça coûte quand une procédure mal suivie ralentit toute la chaîne "
+                "et que personne n'a la même façon de faire.")
+
+    # RH
+    if any(x in t for x in ('ressources humaines', 'human resources', ' rh ', 'formation ')):
+        return ("Ce qui m'a amené à vous écrire : En tant que responsable RH dans le manufacturier, "
+                "vous absorbez un coût que personne ne mesure : un senior mobilisé à temps plein "
+                "pendant 3 à 6 semaines chaque fois qu'un nouveau arrive.")
+
+    # Directeur générique
+    if any(x in t for x in ('directeur', 'directrice', 'director', 'gestionnaire', 'manager ', 'responsable')):
+        return (f"Ce qui m'a amené à vous écrire : En tant que {dir_e}, vous portez probablement "
+                "un risque que peu de gens dans votre organisation voient : le jour où un employé "
+                "clé part, son savoir part avec lui.")
+
+    # Défaut (senior sans titre reconnu)
+    return (f"Ce qui m'a amené à vous écrire : En tant que {dirig}, vous avez probablement bâti "
+            "votre entreprise sur le savoir-faire de quelques personnes clés, mais ce savoir, il "
+            "est où si elles partent demain ?")
 
 
 _CERT_PATTERNS = [
@@ -649,16 +845,32 @@ ACCROCHE: [la phrase ou N/A]
 SOUS_SECTEUR: [le qualificatif précis ou N/A]"""
 
 
-def _build_corps(secteur, norme, sous_secteur):
+def _build_corps(secteur, norme, sous_secteur, lang='fr'):
     if secteur == 'hors_cible':
         return 'N/A'
+    ss = sous_secteur if sous_secteur and sous_secteur.lower() not in ('n/a', '') else None
+    if lang == 'en':
+        if secteur == 'agroalimentaire':
+            return (
+                f"We automated compliance gap detection for {norme}-certified companies. "
+                "Our client Olofée reduced their annual review from 40 hours per month to just a few hours. "
+                "Their quality manager went from verifier to validator."
+            )
+        if ss:
+            return (
+                f"We automated compliance gap detection for {ss} companies certified {norme}. "
+                "What used to take 40 hours per month of manual verification now takes just a few hours."
+            )
+        return (
+            "We automated compliance gap detection for certified companies. "
+            "What used to take 40 hours per month of manual verification now takes just a few hours."
+        )
     if secteur == 'agroalimentaire':
         return (
             f"On a automatisé la détection des non-conformités pour des entreprises certifiées {norme}. "
             "Notre client Olofée a réduit sa révision annuelle de 40 heures par mois à quelques heures. "
             "Leur responsable qualité passe de vérificateur à validateur."
         )
-    ss = sous_secteur if sous_secteur and sous_secteur.lower() not in ('n/a', '') else None
     if ss:
         return (
             f"On a automatisé la détection des non-conformités pour des entreprises {ss} certifiées {norme}. "
@@ -710,8 +922,103 @@ def _build_user_msg(row, web_content=None):
     return '\n'.join(parts)
 
 
+COMBINED_SYSTEM_PROMPT_EN = """You are analyzing the profile of a Quebec industrial prospect for Sonoria, a tool that automates normative non-conformity detection.
+
+TASK 1 — DETECT SECTOR:
+Sonoria automates normative compliance gap detection. A company is a TARGET if it manages documented certifications (ISO, SQF, GMP, CNESST, AS9100, IATF, etc.), regardless of sector. When in doubt, always use generique — never hors_cible.
+
+Choose ONE code from these six:
+- agroalimentaire: industrial food processing, production farm, commercial bakery, cheese factory, slaughterhouse, industrial brewery, dairy, cannery, etc. (NOT: restaurant, bar, fine grocery, caterer, café)
+- manufacturing: fabrication, machining, metallurgy, welding, assembly, industrial electronics, semiconductors, mechanics, aluminum, steel, plastics, rubber, foundry, forge, tooling, industrial machinery, pharmaceutical manufacturing (GMP/BPF, ISO 13485), manufactured medical equipment, industrial automation, etc.
+- construction: building, civil engineering, site work, renovation, excavation, roofing, plumbing, masonry, framing, infrastructure, general contractor, etc.
+- distribution: logistics, warehousing, freight, industrial supply chain, wholesaler, 3PL, etc. (NOT: retail)
+- generique: any company that could have a normative certification but whose sector is unclear or mixed — services with ISO 9001, laboratories, technical consulting, telecom, energy, environment, industrial IT, etc. When in doubt, choose generique.
+- hors_cible: ONLY companies where it is CERTAIN that no normative certification exists — bar, restaurant, café, retail grocery, art gallery, law firm, real estate agency, finance firm, marketing agency. If the slightest doubt exists, use generique.
+
+TASK 2 — IDENTIFY MOST RELEVANT NORM:
+Based on sector AND specific company information, choose the most precise normative standard. If sector is hors_cible, write "N/A".
+
+Reference by sub-sector:
+- agroalimentaire: SQF (default for any Quebec company), HACCP (small company or explicit mention), FSSC 22000 (GFSI mention or large multinational), BRC/BRCGS (ONLY if explicit mention of export to European retailers)
+- manufacturing general: ISO 9001
+- pharmaceutical / nutraceutical / fine chemistry manufacturing: GMP
+- medical device / health equipment manufacturing: ISO 13485
+- aerospace / defense / aviation manufacturing: AS9100
+- automotive / auto parts manufacturing: IATF 16949
+- construction: CNESST
+- food distribution: SQF or ISO 22000
+- non-food distribution: ISO 9001
+- generique: normative compliance
+
+TASK 3 — GENERATE THE OPENER:
+If sector is hors_cible, write exactly "N/A" as the opener (no other text).
+Otherwise, generate a single cold email sentence using the norm from TASK 2. Structure:
+"The reason I'm reaching out: as [English role] in [English sector], [concrete pain with the norm]."
+
+PRECISION: If specific products, markets or processes are mentioned in the data, integrate them into the pain point.
+
+ALREADY CERTIFIED: If a note indicates the company is already certified [X], adapt the angle: "maintaining your [X] certification up to date requires a manual review your team must redo every year" rather than "checking if your procedures comply".
+
+LOCATION: If location is provided, optionally integrate it. Never invent a location.
+
+TASK 4 — IDENTIFY SUBSECTOR:
+If sector is hors_cible, agroalimentaire or generique, write "N/A".
+Otherwise, provide in 2-5 words the precise subsector qualifier as it will fit in "for [SUBSECTOR] companies certified [NORM]".
+Examples: "aerospace", "automotive", "pharmaceutical", "medical device", "industrial pumping", "construction".
+Never write "manufacturing" if a more precise term is possible.
+
+STRICT RULES:
+- Maximum 1 sentence, entirely in English
+- Never the em dash (—) or en dash (–)
+- No CTA, no closing question
+- Role in English: keep or translate naturally (Plant Manager, Quality Manager, President, Owner, etc.)
+- Sector in English: "in the food industry", "in the manufacturing sector", "in construction", "in distribution", "in your industry"
+
+ANGLE BY ROLE:
+- Quality Director / QA Manager / VP Quality → "your team probably spends weeks each year manually verifying that your procedures comply with [X] instead of focusing on continuous improvement."
+- Plant Manager / Production Manager → "the weeks leading up to a [X] audit probably pull your quality team away from production rhythm."
+- President / CEO / General Manager / Owner → "a non-conformity discovered during a [X] audit costs you far more than one caught internally."
+- Operations Manager / VP Operations → "your team probably spends weeks each year manually verifying that your procedures comply with [X] instead of focusing on operations."
+- Engineering Manager / Technical Director → "ensuring your technical procedures meet [X] requirements demands a manual review your team must redo every year."
+- Supply Chain Manager → "keeping your procedures compliant with [X] probably consumes dozens of hours of your team's time each year instead of optimizing the chain."
+- Unclear title → start with "in your company, [pain]." without mentioning a role
+
+EXAMPLES:
+SECTEUR: agroalimentaire
+NORME: SQF
+ACCROCHE: The reason I'm reaching out: as Operations Manager in the food industry, your team probably spends weeks each year manually verifying that your procedures comply with SQF instead of focusing on production.
+SOUS_SECTEUR: N/A
+
+SECTEUR: manufacturing
+NORME: AS9100
+ACCROCHE: The reason I'm reaching out: as Quality Manager in the manufacturing sector, your team probably spends weeks each year manually verifying that your procedures comply with AS9100 instead of focusing on continuous improvement.
+SOUS_SECTEUR: aerospace
+
+SECTEUR: construction
+NORME: CNESST
+ACCROCHE: The reason I'm reaching out: as President of a construction company, a non-conformity discovered during a CNESST inspection costs you far more than one caught internally.
+SOUS_SECTEUR: construction
+
+SECTEUR: generique
+NORME: normative compliance
+ACCROCHE: The reason I'm reaching out: in your company, the annual normative compliance review probably consumes dozens of hours of manual verification each year instead of focusing on your core business.
+SOUS_SECTEUR: N/A
+
+SECTEUR: hors_cible
+NORME: N/A
+ACCROCHE: N/A
+SOUS_SECTEUR: N/A
+
+RESPOND EXACTLY IN THIS FORMAT (four lines, nothing else):
+SECTEUR: [agroalimentaire|manufacturing|construction|distribution|generique|hors_cible]
+NORME: [the specific norm or N/A]
+ACCROCHE: [the sentence or N/A]
+SOUS_SECTEUR: [the precise qualifier or N/A]"""
+
+
 _VALID_SECTORS = {'agroalimentaire', 'manufacturing', 'construction', 'distribution', 'generique', 'hors_cible'}
 _SONNET_SYSTEM = [{'type': 'text', 'text': COMBINED_SYSTEM_PROMPT, 'cache_control': {'type': 'ephemeral'}}]
+_SONNET_SYSTEM_EN = [{'type': 'text', 'text': COMBINED_SYSTEM_PROMPT_EN, 'cache_control': {'type': 'ephemeral'}}]
 
 
 def _parse_sonnet_response(text):
@@ -729,24 +1036,26 @@ def _parse_sonnet_response(text):
     return secteur, norme, accroche, sous_secteur
 
 
-def generate_sector_and_accroche(client, row, web_content=None):
+def generate_sector_and_accroche(client, row, web_content=None, lang='fr'):
     user_msg = _build_user_msg(row, web_content)
+    sonnet_system = _SONNET_SYSTEM_EN if lang == 'en' else _SONNET_SYSTEM
+    fallback_norme = 'normative compliance' if lang == 'en' else 'conformité normative'
     for attempt in range(3):
         try:
             resp = client.messages.create(
                 model='claude-sonnet-4-6', max_tokens=350,
-                system=_SONNET_SYSTEM,
+                system=sonnet_system,
                 messages=[{'role': 'user', 'content': user_msg}],
             )
             secteur, norme, accroche, sous_secteur = _parse_sonnet_response(resp.content[0].text.strip())
-            return secteur, norme, accroche, _build_corps(secteur, norme, sous_secteur)
+            return secteur, norme, accroche, _build_corps(secteur, norme, sous_secteur, lang=lang)
         except Exception:
             if attempt < 2: time.sleep(5)
-    return 'generique', 'conformité normative', 'ERREUR_GENERATION', 'ERREUR_GENERATION'
+    return 'generique', fallback_norme, 'ERREUR_GENERATION', 'ERREUR_GENERATION'
 
 
-def generate_icebreaker(client, row, website_content):
-    company   = _s(row.get('company')) or 'l\'entreprise'
+def generate_icebreaker(client, row, website_content, lang='fr'):
+    company   = _s(row.get('company')) or ('the company' if lang == 'en' else "l'entreprise")
     name      = _s(row.get('name'))
     job_title = _s(row.get('job_title')) or _s(row.get('result_title'))
     headline  = _s(row.get('headline'))
@@ -756,36 +1065,44 @@ def generate_icebreaker(client, row, website_content):
     summary  = _s(row.get('summary'))
     location = _s(row.get('location'))
 
-    context_parts = [f"Entreprise: {company}"]
-    if name:
-        context_parts.append(f"Contact: {name}" + (f" ({job_title})" if job_title else ''))
-    if headline:
-        context_parts.append(f"Headline LinkedIn: {headline}")
-    if location:
-        context_parts.append(f"Localisation: {location}")
-    if linkedin_desc:
-        context_parts.append(f"Description LinkedIn: {linkedin_desc[:500]}")
-    if linkedin_spec:
-        context_parts.append(f"Spécialités LinkedIn: {linkedin_spec[:300]}")
-    if job_desc:
-        context_parts.append(f"Description du poste: {job_desc[:300]}")
-    if summary:
-        context_parts.append(f"Résumé du contact: {summary[:300]}")
-    if website_content:
-        context_parts.append(f"\nContenu du site web:\n{website_content[:800]}")
+    if lang == 'en':
+        context_parts = [f"Company: {company}"]
+        if name:        context_parts.append(f"Contact: {name}" + (f" ({job_title})" if job_title else ''))
+        if headline:    context_parts.append(f"LinkedIn Headline: {headline}")
+        if location:    context_parts.append(f"Location: {location}")
+        if linkedin_desc: context_parts.append(f"LinkedIn Description: {linkedin_desc[:500]}")
+        if linkedin_spec: context_parts.append(f"LinkedIn Specialties: {linkedin_spec[:300]}")
+        if job_desc:    context_parts.append(f"Job Description: {job_desc[:300]}")
+        if summary:     context_parts.append(f"Contact Summary: {summary[:300]}")
+        if website_content:
+            context_parts.append(f"\nWebsite content:\n{website_content[:800]}")
+        else:
+            context_parts.append("\nNote: no website content available. You must still generate the icebreaker using the LinkedIn information above. Never mention that the site is not accessible.")
+        user_msg = '\n'.join(context_parts) + f'\n\nGenerate the icebreaker for {company}.'
     else:
-        context_parts.append("\nNote: aucun contenu de site web disponible. Tu dois quand même générer l'icebreaker en utilisant les informations LinkedIn ci-dessus. Ne mentionne jamais que le site n'est pas accessible.")
+        context_parts = [f"Entreprise: {company}"]
+        if name:        context_parts.append(f"Contact: {name}" + (f" ({job_title})" if job_title else ''))
+        if headline:    context_parts.append(f"Headline LinkedIn: {headline}")
+        if location:    context_parts.append(f"Localisation: {location}")
+        if linkedin_desc: context_parts.append(f"Description LinkedIn: {linkedin_desc[:500]}")
+        if linkedin_spec: context_parts.append(f"Spécialités LinkedIn: {linkedin_spec[:300]}")
+        if job_desc:    context_parts.append(f"Description du poste: {job_desc[:300]}")
+        if summary:     context_parts.append(f"Résumé du contact: {summary[:300]}")
+        if website_content:
+            context_parts.append(f"\nContenu du site web:\n{website_content[:800]}")
+        else:
+            context_parts.append("\nNote: aucun contenu de site web disponible. Tu dois quand même générer l'icebreaker en utilisant les informations LinkedIn ci-dessus. Ne mentionne jamais que le site n'est pas accessible.")
+        user_msg = '\n'.join(context_parts) + f"\n\nGénère l'icebreaker pour {company}."
 
-    user_msg = '\n'.join(context_parts) + f'\n\nGénère l\'icebreaker pour {company}.'
-
+    sys_prompt = SYSTEM_PROMPT_EN if lang == 'en' else SYSTEM_PROMPT
     response = client.messages.create(
         model='claude-haiku-4-5-20251001',
         max_tokens=200,
-        system=[{'type': 'text', 'text': SYSTEM_PROMPT, 'cache_control': {'type': 'ephemeral'}}],
+        system=[{'type': 'text', 'text': sys_prompt, 'cache_control': {'type': 'ephemeral'}}],
         messages=[{'role': 'user', 'content': user_msg}],
     )
     text = response.content[0].text.strip()
-    for ch in ['\u2014', '\u2013', '\u2012', '\u2015']:
+    for ch in ['—', '–', '‒', '―']:
         text = text.replace(ch, ' ')
     return re.sub(r' {2,}', ' ', text).strip()
 
@@ -828,7 +1145,7 @@ def _scrape_all_parallel(df):
     return results
 
 
-def _generate_icebreakers_parallel(client, df_rows, secteurs, web_contents):
+def _generate_icebreakers_parallel(client, df_rows, secteurs, web_contents, lang='fr'):
     """Generate all icebreakers concurrently. Returns list[str]."""
     total = len(df_rows)
     results = [''] * total
@@ -838,7 +1155,7 @@ def _generate_icebreakers_parallel(client, df_rows, secteurs, web_contents):
         if secteurs[i] == 'hors_cible':
             return i, ''
         try:
-            return i, generate_icebreaker(client, row, web_contents[i])
+            return i, generate_icebreaker(client, row, web_contents[i], lang=lang)
         except Exception as e:
             return i, f'[Erreur: {str(e)[:80]}]'
 
@@ -854,7 +1171,7 @@ def _generate_icebreakers_parallel(client, df_rows, secteurs, web_contents):
     return results
 
 
-def run_icebreaker_job(job_id, df, api_key):
+def run_icebreaker_job(job_id, df, api_key, lang='fr'):
     client = anthropic.Anthropic(api_key=api_key)
     df = df[~df['job_title'].apply(lambda t: is_bad_role(_s(t)))].reset_index(drop=True)
     total = len(df)
@@ -876,7 +1193,7 @@ def run_icebreaker_job(job_id, df, api_key):
             'i': i, 'total': total, 'company': company,
             'status': 'classifying', 'scraped': bool(web_content)
         })
-        secteur, norme, accroche_conformite, corps_email = generate_sector_and_accroche(client, row, web_content)
+        secteur, norme, accroche_conformite, corps_email = generate_sector_and_accroche(client, row, web_content, lang=lang)
 
         _push_event(job_id, 'progress', {
             'i': i, 'total': total, 'company': company,
@@ -886,7 +1203,7 @@ def run_icebreaker_job(job_id, df, api_key):
             icebreaker = ''
         else:
             try:
-                icebreaker = generate_icebreaker(client, row, web_content)
+                icebreaker = generate_icebreaker(client, row, web_content, lang=lang)
             except Exception as e:
                 icebreaker = f'[Erreur: {str(e)[:80]}]'
 
@@ -909,20 +1226,30 @@ def run_icebreaker_job(job_id, df, api_key):
 
 def _save_job_csv(job_id, df, secteurs, normes, accroches, corps_list, icebreakers):
     df = df.copy()
-    for col in ('icebreaker', 'accroche'):
+    for col in ('icebreaker', 'accroche', 'accroche_conformite'):
         if col in df.columns: df = df.drop(columns=[col])
-    df.insert(0, 'secteur_detecte',   secteurs)
-    df.insert(0, 'norme_detectee',    normes)
-    df.insert(0, 'corps_email',       corps_list)
+    df.insert(0, 'secteur_detecte',     secteurs)
+    df.insert(0, 'norme_detectee',      normes)
+    df.insert(0, 'corps_email',         corps_list)
     df.insert(0, 'accroche_conformite', accroches)
-    df.insert(0, 'icebreaker',        icebreakers)
+    df.insert(0, 'icebreaker',          icebreakers)
     excluded = int((df['secteur_detecte'] == 'hors_cible').sum())
     df = df[df['secteur_detecte'] != 'hors_cible'].reset_index(drop=True)
     df.to_csv(os.path.join(RESULTS_DIR, f'{job_id}.csv'), index=False, encoding='utf-8-sig')
     return len(df), excluded
 
 
-def run_icebreaker_job_batch(job_id, df, api_key):
+def _save_procedures_csv(job_id, df, icebreakers, accroches_proc):
+    df = df.copy()
+    for col in ('icebreaker', 'accroche', 'accroche_procedures'):
+        if col in df.columns: df = df.drop(columns=[col])
+    df.insert(0, 'accroche_procedures', accroches_proc)
+    df.insert(0, 'icebreaker',          icebreakers)
+    df.to_csv(os.path.join(RESULTS_DIR, f'{job_id}.csv'), index=False, encoding='utf-8-sig')
+    return len(df)
+
+
+def run_icebreaker_job_batch(job_id, df, api_key, lang='fr'):
     client = anthropic.Anthropic(api_key=api_key)
     df = df[~df['job_title'].apply(lambda t: is_bad_role(_s(t)))].reset_index(drop=True)
     total = len(df)
@@ -940,7 +1267,7 @@ def run_icebreaker_job_batch(job_id, df, api_key):
             'params': {
                 'model': 'claude-sonnet-4-6',
                 'max_tokens': 350,
-                'system': _SONNET_SYSTEM,
+                'system': _SONNET_SYSTEM_EN if lang == 'en' else _SONNET_SYSTEM,
                 'messages': [{'role': 'user', 'content': _build_user_msg(row, web_contents[i])}],
             },
         })
@@ -971,7 +1298,7 @@ def run_icebreaker_job_batch(job_id, df, api_key):
             secteur, norme, accroche, sous_secteur = _parse_sonnet_response(
                 result.result.message.content[0].text.strip()
             )
-            corps = _build_corps(secteur, norme, sous_secteur)
+            corps = _build_corps(secteur, norme, sous_secteur, lang=lang)
         else:
             secteur, norme, accroche, corps = 'generique', 'conformité normative', 'ERREUR_GENERATION', 'ERREUR_GENERATION'
         secteurs[i]   = secteur
@@ -979,15 +1306,24 @@ def run_icebreaker_job_batch(job_id, df, api_key):
         accroches[i]  = accroche
         corps_list[i] = corps
 
-    # Phase 5 — icebreakers Haiku en parallèle
+    # Phase 5 — icebreakers Haiku en parallèle + accroches procédures (rule-based)
     _push_event(job_id, 'progress', {'i': 0, 'total': total, 'company': '', 'status': 'generating'})
     df_rows = list(df.iterrows())
-    icebreakers = _generate_icebreakers_parallel(client, df_rows, secteurs, web_contents)
+    icebreakers = _generate_icebreakers_parallel(client, df_rows, secteurs, web_contents, lang=lang)
+
+    accroches_proc = [
+        '' if secteurs[i] == 'hors_cible' else _build_accroche_procedures(
+            _s(row.get('job_title')) or _s(row.get('result_title')),
+            _s(row.get('first_name')),
+        )
+        for i, (_, row) in enumerate(df.iterrows())
+    ]
 
     for i, (_, row) in enumerate(df.iterrows()):
         company = _s(row.get('company')) or _s(row.get('name')) or f'prospect {i+1}'
         _push_event(job_id, 'result', {
             'i': i, 'company': company, 'icebreaker': icebreakers[i],
+            'accroche_procedures': accroches_proc[i],
             'accroche_conformite': accroches[i], 'secteur': secteurs[i],
             'norme': normes[i], 'corps_email': corps_list[i],
         })
@@ -996,6 +1332,42 @@ def run_icebreaker_job_batch(job_id, df, api_key):
     with _jobs_lock:
         _jobs[job_id]['done'] = True
     _push_event(job_id, 'done', {'total': final_total, 'excluded': excluded})
+
+
+def run_icebreaker_job_procedures(job_id, df, api_key, lang='fr'):
+    client = anthropic.Anthropic(api_key=api_key)
+    df = df[~df['job_title'].apply(lambda t: is_bad_role(_s(t)))].reset_index(drop=True)
+    total = len(df)
+
+    _push_event(job_id, 'progress', {'i': 0, 'total': total, 'company': '', 'status': 'scraping'})
+    web_contents = _scrape_all_parallel(df)
+
+    _push_event(job_id, 'progress', {'i': 0, 'total': total, 'company': '', 'status': 'generating'})
+    df_rows = list(df.iterrows())
+    dummy_secteurs = ['in_scope'] * total
+    icebreakers = _generate_icebreakers_parallel(client, df_rows, dummy_secteurs, web_contents, lang=lang)
+
+    accroches_proc = [
+        _build_accroche_procedures(
+            _s(row.get('job_title')) or _s(row.get('result_title')),
+            _s(row.get('first_name')),
+            lang=lang,
+        )
+        for _, row in df.iterrows()
+    ]
+
+    for i, (_, row) in enumerate(df.iterrows()):
+        company = _s(row.get('company')) or _s(row.get('name')) or f'prospect {i+1}'
+        _push_event(job_id, 'result', {
+            'i': i, 'company': company,
+            'icebreaker': icebreakers[i],
+            'accroche_procedures': accroches_proc[i],
+        })
+
+    final_total = _save_procedures_csv(job_id, df, icebreakers, accroches_proc)
+    with _jobs_lock:
+        _jobs[job_id]['done'] = True
+    _push_event(job_id, 'done', {'total': final_total, 'excluded': 0})
 
 
 # ---------------------------------------------------------------------------
@@ -1214,12 +1586,17 @@ def icebreaker_start():
         df = df.head(int(limit))
 
     mode = request.form.get('mode', 'realtime')
+    icebreaker_type = request.form.get('icebreaker_type', 'conformites')
+    lang = request.form.get('lang', 'fr')
     job_id = str(uuid.uuid4())
     with _jobs_lock:
         _jobs[job_id] = {'events': [], 'done': False}
 
-    target = run_icebreaker_job_batch if mode == 'batch' else run_icebreaker_job
-    thread = threading.Thread(target=target, args=(job_id, df, api_key), daemon=True)
+    if icebreaker_type == 'procedures':
+        target = run_icebreaker_job_procedures
+    else:
+        target = run_icebreaker_job_batch if mode == 'batch' else run_icebreaker_job
+    thread = threading.Thread(target=target, args=(job_id, df, api_key, lang), daemon=True)
     thread.start()
 
     return jsonify({'job_id': job_id, 'total': len(df), 'mode': mode})

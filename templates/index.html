@@ -161,7 +161,17 @@
     .results-table th { position: sticky; top: 0; background: #1a1a22; color: #777; font-weight: 500; padding: 8px 10px; border-bottom: 1px solid #2a2a38; text-align: left; }
     .results-table td { padding: 7px 10px; border-bottom: 1px solid #1e1e28; color: #ccc; vertical-align: top; }
     .results-table td.icebreaker-cell { color: #a78bfa; font-style: italic; }
+    .results-table td.accroche-proc-cell { color: #60d0f0; font-style: italic; }
     .results-table td.accroche-cell { color: #67e8a0; font-style: italic; }
+    .results-table .col-conf { display: table-cell; }
+    .results-table .col-proc { display: none; }
+    .results-table.mode-proc .col-conf { display: none; }
+    .results-table.mode-proc .col-proc { display: table-cell; }
+    .type-toggle { display: flex; gap: 4px; background: #22222e; border: 1px solid #2e2e40; border-radius: 10px; padding: 4px; margin-top: 6px; }
+    .type-btn { flex: 1; padding: 9px 16px; background: none; border: none; border-radius: 7px; color: #888; font-size: 0.85rem; font-weight: 500; cursor: pointer; transition: all 0.15s; }
+    .type-btn.active { background: #6c63ff; color: #fff; }
+    .type-btn:hover:not(.active) { color: #ccc; background: #2a2a38; }
+    .type-hint { font-size: 0.72rem; font-weight: 400; opacity: 0.75; display: block; margin-top: 2px; }
     .results-table td.secteur-cell { color: #f59e42; font-size: 0.72rem; white-space: nowrap; }
     .results-table td.secteur-cell.hors-cible { color: #e05555; font-weight: 600; }
     .results-table td.corps-cell { color: #888; font-size: 0.72rem; max-width: 260px; }
@@ -252,13 +262,30 @@
 <div class="tab-panel" id="tab-icebreaker">
   <div class="card">
 
+    <div class="field" style="display:flex;gap:12px;">
+      <div style="flex:1;">
+        <label>Type d'accroche</label>
+        <div class="type-toggle" id="typeToggle">
+          <button class="type-btn active" data-type="conformites">Conformités<span class="type-hint">IA — détecte secteur + norme (~$0.003/prospect)</span></button>
+          <button class="type-btn" data-type="procedures">Procédures<span class="type-hint">Gratuit — règles sur le titre de poste, instantané</span></button>
+        </div>
+      </div>
+      <div style="flex:0 0 auto;">
+        <label>Langue</label>
+        <div class="type-toggle" id="langToggle" style="min-width:120px;">
+          <button class="lang-btn active" data-lang="fr">FR</button>
+          <button class="lang-btn" data-lang="en">EN</button>
+        </div>
+      </div>
+    </div>
+
     <div class="field">
       <label>Clé API Anthropic</label>
       <input type="password" id="apiKeyInput" placeholder="sk-ant-api03-..." autocomplete="off">
-      <div class="api-hint">
+      <div class="api-hint" id="costHint">
         Crée ta clé sur <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>.
         Elle n'est jamais envoyée ailleurs que directement à l'API Anthropic.
-        Coût estimé: ~$0.002 USD par prospect (Claude Haiku). Si le fichier contient déjà des icebreakers, ils sont conservés — seules les accroches conformité sont générées.
+        Coût estimé: ~$0.003 USD par prospect (Claude Haiku + Sonnet pour la classification).
       </div>
     </div>
 
@@ -276,9 +303,9 @@
       <input type="number" id="limitInput" placeholder="ex: 15" min="1" style="width:160px;">
     </div>
 
-    <div class="field" style="margin-top:12px;display:flex;align-items:center;gap:10px;">
+    <div id="batchModeField" style="margin-top:12px;display:flex;align-items:center;gap:10px;">
       <input type="checkbox" id="batchMode" style="width:16px;height:16px;cursor:pointer;">
-      <label for="batchMode" style="cursor:pointer;font-weight:500;">Mode Batch <span style="color:#888;font-weight:400">(50% moins cher — résultats en quelques heures, pas en temps réel)</span></label>
+      <label for="batchMode" style="cursor:pointer;font-weight:500;font-size:0.85rem;">Mode Batch <span style="color:#888;font-weight:400">(50% moins cher — résultats en quelques heures, pas en temps réel)</span></label>
     </div>
 
     <button class="btn-primary" id="iceBtn" disabled>Générer les icebreakers</button>
@@ -293,7 +320,7 @@
 
       <div class="results-table-wrap">
         <table class="results-table">
-          <thead><tr><th>Entreprise</th><th>Statut</th><th>Icebreaker</th><th>Accroche conf.</th><th>Secteur</th><th>Corps email</th></tr></thead>
+          <thead><tr><th>Entreprise</th><th>Statut</th><th>Icebreaker</th><th class="col-proc">Accroche proc.</th><th class="col-conf">Accroche conf.</th><th class="col-conf">Secteur</th><th class="col-conf">Corps email</th></tr></thead>
           <tbody id="iceResultsBody"></tbody>
         </table>
       </div>
@@ -549,6 +576,30 @@ const iceDownloadBtn = document.getElementById('iceDownloadBtn');
 const apiKeyInput = document.getElementById('apiKeyInput');
 let iceFile = null;
 let currentJobId = null;
+let currentIceType = 'conformites';
+
+let currentLang = 'fr';
+document.querySelectorAll('.lang-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentLang = btn.dataset.lang;
+  });
+});
+
+document.querySelectorAll('.type-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.type-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentIceType = btn.dataset.type;
+    const isProc = currentIceType === 'procedures';
+    document.getElementById('batchModeField').style.display = isProc ? 'none' : 'flex';
+    document.querySelector('.results-table').classList.toggle('mode-proc', isProc);
+    document.getElementById('costHint').innerHTML = isProc
+      ? 'L\'icebreaker site web utilise Claude Haiku (~$0.0005/prospect). L\'accroche procédures est générée par règles — aucun appel Sonnet.'
+      : 'Crée ta clé sur <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>. Elle n\'est jamais envoyée ailleurs que directement à l\'API Anthropic. Coût estimé: ~$0.003 USD par prospect (Claude Haiku + Sonnet pour la classification).';
+  });
+});
 
 // Restore API key from localStorage
 apiKeyInput.value = localStorage.getItem('sonoria_api_key') || '';
@@ -595,9 +646,11 @@ iceBtn.addEventListener('click', async () => {
   const fd = new FormData();
   fd.append('file', iceFile);
   fd.append('api_key', apiKeyInput.value.trim());
+  fd.append('icebreaker_type', currentIceType);
+  fd.append('lang', currentLang);
   const limit = document.getElementById('limitInput').value.trim();
   if (limit) fd.append('limit', limit);
-  if (document.getElementById('batchMode').checked) fd.append('mode', 'batch');
+  if (currentIceType !== 'procedures' && document.getElementById('batchMode').checked) fd.append('mode', 'batch');
 
   try {
     const res = await fetch('/icebreaker/start', { method: 'POST', body: fd });
@@ -655,7 +708,7 @@ function listenToJob(jobId, total) {
       if (!rowMap[ev.data.i]) {
         const tr = document.createElement('tr');
         tr.id = `ice-row-${ev.data.i}`;
-        tr.innerHTML = `<td>${ev.data.company}</td><td class="status-cell">${badge}</td><td class="icebreaker-cell">—</td><td class="accroche-cell">—</td><td class="secteur-cell">—</td><td class="corps-cell">—</td>`;
+        tr.innerHTML = `<td>${ev.data.company}</td><td class="status-cell">${badge}</td><td class="icebreaker-cell">—</td><td class="accroche-proc-cell col-proc">—</td><td class="accroche-cell col-conf">—</td><td class="secteur-cell col-conf">—</td><td class="corps-cell col-conf">—</td>`;
         document.getElementById('iceResultsBody').prepend(tr);
         rowMap[ev.data.i] = tr;
       } else {
@@ -664,13 +717,14 @@ function listenToJob(jobId, total) {
     }
 
     if (ev.type === 'result') {
-      const isError = ev.data.icebreaker.startsWith('[Erreur');
+      const isError = (ev.data.icebreaker || '').startsWith('[Erreur');
       const badge = isError
         ? '<span class="badge badge-error">Erreur</span>'
         : '<span class="badge badge-done">✓</span>';
       if (rowMap[ev.data.i]) {
         rowMap[ev.data.i].querySelector('.status-cell').innerHTML = badge;
         rowMap[ev.data.i].querySelector('.icebreaker-cell').textContent = ev.data.icebreaker;
+        rowMap[ev.data.i].querySelector('.accroche-proc-cell').textContent = ev.data.accroche_procedures || '';
         rowMap[ev.data.i].querySelector('.accroche-cell').textContent = ev.data.accroche_conformite || '';
         const secteurCell = rowMap[ev.data.i].querySelector('.secteur-cell');
         secteurCell.textContent = ev.data.secteur || '';

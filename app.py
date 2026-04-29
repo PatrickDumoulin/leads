@@ -1338,15 +1338,10 @@ def run_icebreaker_job_procedures(job_id, df, api_key, lang='fr'):
     client = anthropic.Anthropic(api_key=api_key)
     df = df[~df['job_title'].apply(lambda t: is_bad_role(_s(t)))].reset_index(drop=True)
     total = len(df)
-
-    _push_event(job_id, 'progress', {'i': 0, 'total': total, 'company': '', 'status': 'scraping'})
-    web_contents = _scrape_all_parallel(df)
-
-    _push_event(job_id, 'progress', {'i': 0, 'total': total, 'company': '', 'status': 'generating'})
     df_rows = list(df.iterrows())
-    dummy_secteurs = ['in_scope'] * total
-    icebreakers = _generate_icebreakers_parallel(client, df_rows, dummy_secteurs, web_contents, lang=lang)
+    icebreakers = [''] * total
 
+    # Accroches rule-based : instant, on les calcule d'abord
     accroches_proc = [
         _build_accroche_procedures(
             _s(row.get('job_title')) or _s(row.get('result_title')),
@@ -1356,13 +1351,50 @@ def run_icebreaker_job_procedures(job_id, df, api_key, lang='fr'):
         for _, row in df.iterrows()
     ]
 
-    for i, (_, row) in enumerate(df.iterrows()):
-        company = _s(row.get('company')) or _s(row.get('name')) or f'prospect {i+1}'
-        _push_event(job_id, 'result', {
-            'i': i, 'company': company,
-            'icebreaker': icebreakers[i],
-            'accroche_procedures': accroches_proc[i],
-        })
+    _push_event(job_id, 'progress', {'i': 0, 'total': total, 'company': '', 'status': 'scraping'})
+
+    def scrape_one(i):
+        _, row = df_rows[i]
+        website = _s(row.get('corporate_website')) or _s(row.get('domain_name'))
+        if website and not _linkedin_data_sufficient(row):
+            return i, scrape_website(website)
+        return i, None
+
+    def gen_ice(i, web_content):
+        _, row = df_rows[i]
+        try:
+            return i, generate_icebreaker(client, row, web_content, lang)
+        except Exception as e:
+            return i, f'[Erreur: {str(e)[:80]}]'
+
+    # Pipeline : dès qu'un scrape est terminé, on lance le Haiku immédiatement
+    # Temps total ≈ max(scraping, haiku) au lieu de scraping + haiku
+    workers = min(_SCRAPE_WORKERS + _API_WORKERS, max(total, 1))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        scrape_futs = {ex.submit(scrape_one, i): i for i in range(total)}
+        haiku_futs = {}
+        for fut in as_completed(scrape_futs):
+            try:
+                i, web_content = fut.result()
+            except Exception:
+                i = scrape_futs[fut]
+                web_content = None
+            haiku_futs[ex.submit(gen_ice, i, web_content)] = i
+
+        for fut in as_completed(haiku_futs):
+            try:
+                i, ice = fut.result()
+            except Exception:
+                i = haiku_futs[fut]
+                ice = ''
+            icebreakers[i] = ice
+            _, row = df_rows[i]
+            company = _s(row.get('company')) or _s(row.get('name')) or f'prospect {i+1}'
+            _push_event(job_id, 'result', {
+                'i': i, 'company': company,
+                'icebreaker': ice,
+                'accroche_procedures': accroches_proc[i],
+            })
 
     final_total = _save_procedures_csv(job_id, df, icebreakers, accroches_proc)
     with _jobs_lock:

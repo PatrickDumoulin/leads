@@ -1706,24 +1706,24 @@ RÉPONDS EXACTEMENT en 2 lignes, rien d'autre :
 SECTEUR: [manufacturier|distribution|agroalimentaire|construction|autre_cible|hors_cible]
 RAISON: [5 à 10 mots expliquant la décision]"""
 
-_FOOD_FILTER_PROMPT = """Tu analyses des entreprises québécoises pour déterminer si elles font partie du secteur agroalimentaire industriel ou d'un secteur adjacent pertinent.
+_FOOD_FILTER_PROMPT = """Tu analyses des entreprises québécoises pour déterminer si elles sont des transformateurs agroalimentaires industriels — c'est-à-dire des entreprises qui fabriquent ou transforment physiquement des produits alimentaires.
 
-RÈGLE ABSOLUE — ULTRA CONSERVATEUR : Vaut bien mieux garder une mauvaise cible qu'exclure une bonne cible alimentaire. En cas de doute, utilise TOUJOURS incertain.
+RÈGLE ABSOLUE — ULTRA CONSERVATEUR : Vaut bien mieux garder une mauvaise cible qu'exclure un vrai transformateur. En cas de doute, utilise TOUJOURS incertain.
 
 Codes :
-- alimentaire : transformation alimentaire industrielle (usine, conserverie, brasserie, fromagerie, abattoir, boulangerie industrielle, laiterie, meunerie, acériculteur commercial, cidrerie, distillerie, charcuterie industrielle), distribution alimentaire, nutraceutique, suppléments alimentaires, agriculture commerciale à grande échelle, emballage alimentaire, ingrédients alimentaires, alimentation animale industrielle
-- incertain : entreprise dont l'activité alimentaire est possible mais pas certaine — logistique générale pouvant inclure de l'alimentaire, emballage non-spécifié, équipements industriels polyvalents, secteur mixte avec composante alimentaire possible, transformation non-précisée. EN CAS DE DOUTE → incertain.
-- hors_alimentaire : UNIQUEMENT si CERTAIN que l'entreprise n'a aucun rapport avec la chaîne alimentaire — manufacturing non-alimentaire clair (aérospatial, auto, métal pur, pharmacie non-alimentaire, électronique), construction, TI pur, agence marketing pure, cabinet d'avocats, restaurant ou bar (service alimentaire, pas transformation industrielle). Si le moindre doute existe → incertain.
+- transformateur : entreprise qui fabrique ou transforme physiquement des aliments — conserverie, brasserie, fromagerie, abattoir, boulangerie industrielle, laiterie, meunerie, cidrerie, distillerie, charcuterie industrielle, usine de transformation de viande/poisson/légumes/fruits, fabricant de boissons, fabricant d'aliments préparés, acériculteur avec usine, fabricant de nutraceutiques/suppléments alimentaires, fabricant d'aliments pour animaux, fabricant d'ingrédients alimentaires industriels
+- incertain : entreprise dont l'activité de transformation alimentaire est possible mais pas certaine — nom d'entreprise ambigu avec lien alimentaire possible, agriculture sans précision sur la transformation, emballage alimentaire, équipements pour l'industrie alimentaire, ferme dont on ne sait pas si elle transforme. EN CAS DE DOUTE → incertain.
+- hors_cible : UNIQUEMENT si CERTAIN que l'entreprise ne transforme pas d'aliments — distributeur ou grossiste alimentaire pur (sans transformation), restaurant/bar/café/traiteur (service, pas fabrication), épicerie/supermarché, manufacturing non-alimentaire, construction, TI, finance, marketing. Si le moindre doute existe → incertain.
 
 RÉPONDS EXACTEMENT en 2 lignes, rien d'autre :
-SECTEUR: [alimentaire|incertain|hors_alimentaire]
+SECTEUR: [transformateur|incertain|hors_cible]
 RAISON: [5 à 10 mots expliquant la décision]"""
 
 _FILTER_SYSTEM = [{'type': 'text', 'text': _INDUSTRY_FILTER_PROMPT, 'cache_control': {'type': 'ephemeral'}}]
 _FOOD_FILTER_SYSTEM = [{'type': 'text', 'text': _FOOD_FILTER_PROMPT, 'cache_control': {'type': 'ephemeral'}}]
 
 _FILTER_VALID      = {'manufacturier', 'distribution', 'agroalimentaire', 'construction', 'autre_cible', 'hors_cible'}
-_FOOD_FILTER_VALID = {'alimentaire', 'incertain', 'hors_alimentaire'}
+_FOOD_FILTER_VALID = {'transformateur', 'incertain', 'hors_cible'}
 
 
 def _build_filter_msg(row):
@@ -1814,10 +1814,7 @@ def run_industry_filter_job(job_id, df, api_key, mode='general'):
         result_df.insert(0, 'raison_filtre',  raisons)
         result_df.insert(0, 'secteur_filtre', secteurs)
 
-        if mode == 'alimentaire':
-            excl_val = 'hors_alimentaire'
-        else:
-            excl_val = 'hors_cible'
+        excl_val = 'hors_cible'
         excluded = int(sum(1 for s in secteurs if s == excl_val))
         kept_df  = result_df[result_df['secteur_filtre'] != excl_val].reset_index(drop=True)
         kept_df.to_csv(os.path.join(RESULTS_DIR, f'filter_{job_id}.csv'), index=False, encoding='utf-8-sig')

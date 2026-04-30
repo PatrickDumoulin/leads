@@ -366,7 +366,7 @@
 <div class="tab-panel" id="tab-industry">
   <div class="card">
     <p style="color:#aaa;font-size:0.85rem;margin-bottom:6px;">Analyse chaque prospect avec Claude Haiku et retire ceux qui sont clairement hors secteur industriel (restaurants, avocats, agences, etc.).</p>
-    <p style="color:#555;font-size:0.78rem;margin-bottom:20px;">Ultra-conservateur : en cas de doute, le prospect est conservé. Traitement en batch — coût estimé : ~$0.00025 USD / prospect.</p>
+    <p style="color:#555;font-size:0.78rem;margin-bottom:20px;">Ultra-conservateur : en cas de doute, le prospect est conservé. Coût estimé : ~$0.0005 USD / prospect.</p>
 
     <div class="field">
       <label>Clé API Anthropic</label>
@@ -1131,15 +1131,10 @@ function listenToIndustryJob(jobId, total) {
 
     if (ev.type === 'progress') {
       const d = ev.data;
-      if (d.status === 'submitting') {
-        document.getElementById('indProgLabel').textContent = `Batch envoyé à Anthropic — ${total} prospects en attente de traitement...`;
-        document.getElementById('indProgBar').style.width = '5%';
-      } else if (d.status === 'waiting') {
-        const pct = Math.max(5, Math.round((d.done / total) * 95));
-        document.getElementById('indProgBar').style.width = pct + '%';
-        document.getElementById('indProgLabel').textContent = `Anthropic traite le batch — ${d.done} / ${total} complétés`;
-        document.getElementById('indProgCount').textContent = `${d.done} / ${total}`;
-      }
+      const pct = Math.round((d.done / total) * 100);
+      document.getElementById('indProgBar').style.width = pct + '%';
+      document.getElementById('indProgLabel').textContent = `Classification en cours...`;
+      document.getElementById('indProgCount').textContent = `${d.done} / ${total}`;
     }
 
     if (ev.type === 'done') {

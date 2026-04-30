@@ -1757,70 +1757,50 @@ def _classify_one(client, row):
 
 
 def run_industry_filter_job(job_id, df, api_key):
-    client = anthropic.Anthropic(api_key=api_key)
-    total = len(df)
-    df_rows = list(df.iterrows())
-    secteurs = ['autre_cible'] * total
-    raisons  = [''] * total
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        total = len(df)
+        df_rows = list(df.iterrows())
+        secteurs = ['autre_cible'] * total
+        raisons  = [''] * total
+        done_count = 0
 
-    # Phase 1 — submit Haiku batch (all leads at once, no rate limit concern)
-    _push_event(job_id, 'progress', {'i': 0, 'total': total, 'status': 'submitting'})
-    batch_requests = []
-    for i, (_, row) in enumerate(df_rows):
-        batch_requests.append({
-            'custom_id': str(i),
-            'params': {
-                'model': 'claude-haiku-4-5-20251001',
-                'max_tokens': 60,
-                'system': _FILTER_SYSTEM,
-                'messages': [{'role': 'user', 'content': _build_filter_msg(row)}],
-            },
-        })
-    batch = client.beta.messages.batches.create(requests=batch_requests)
-    batch_id = batch.id
+        _push_event(job_id, 'progress', {'done': 0, 'total': total, 'status': 'classifying'})
 
-    # Phase 2 — poll until Anthropic finishes
-    while True:
-        time.sleep(20)
-        batch = client.beta.messages.batches.retrieve(batch_id)
-        counts = batch.request_counts
-        done_count = counts.succeeded + counts.errored + counts.canceled + counts.expired
-        _push_event(job_id, 'progress', {
-            'i': done_count, 'total': total,
-            'status': 'waiting', 'done': done_count,
-        })
-        if batch.processing_status == 'ended':
-            break
+        def classify_one_indexed(i):
+            _, row = df_rows[i]
+            s, r = _classify_one(client, row)
+            return i, s, r
 
-    # Phase 3 — collect results
-    for result in client.beta.messages.batches.results(batch_id):
-        i = int(result.custom_id)
-        if result.result.type == 'succeeded':
-            text = result.result.message.content[0].text.strip()
-            s, r = 'autre_cible', ''
-            for line in text.split('\n'):
-                if line.startswith('SECTEUR:'):
-                    val = line.split(':', 1)[1].strip().lower()
-                    if val in _FILTER_VALID:
-                        s = val
-                elif line.startswith('RAISON:'):
-                    r = line.split(':', 1)[1].strip()
-        else:
-            s, r = 'autre_cible', 'erreur batch'
-        secteurs[i] = s
-        raisons[i]  = r
+        workers = min(25, total) if total else 1
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(classify_one_indexed, i): i for i in range(total)}
+            for fut in as_completed(futures):
+                try:
+                    i, s, r = fut.result()
+                except Exception:
+                    i = futures[fut]
+                    s, r = 'autre_cible', 'erreur'
+                secteurs[i] = s
+                raisons[i]  = r
+                done_count += 1
+                _push_event(job_id, 'progress', {'done': done_count, 'total': total, 'status': 'classifying'})
 
-    # Build output
-    result_df = df.copy()
-    result_df.insert(0, 'raison_filtre',  raisons)
-    result_df.insert(0, 'secteur_filtre', secteurs)
-    excluded = int(sum(1 for s in secteurs if s == 'hors_cible'))
-    kept_df  = result_df[result_df['secteur_filtre'] != 'hors_cible'].reset_index(drop=True)
-    kept_df.to_csv(os.path.join(RESULTS_DIR, f'filter_{job_id}.csv'), index=False, encoding='utf-8-sig')
+        result_df = df.copy()
+        result_df.insert(0, 'raison_filtre',  raisons)
+        result_df.insert(0, 'secteur_filtre', secteurs)
+        excluded = int(sum(1 for s in secteurs if s == 'hors_cible'))
+        kept_df  = result_df[result_df['secteur_filtre'] != 'hors_cible'].reset_index(drop=True)
+        kept_df.to_csv(os.path.join(RESULTS_DIR, f'filter_{job_id}.csv'), index=False, encoding='utf-8-sig')
 
-    with _jobs_lock:
-        _jobs[job_id]['done'] = True
-    _push_event(job_id, 'done', {'kept': len(kept_df), 'excluded': excluded, 'total': total})
+        with _jobs_lock:
+            _jobs[job_id]['done'] = True
+        _push_event(job_id, 'done', {'kept': len(kept_df), 'excluded': excluded, 'total': total})
+
+    except Exception as e:
+        with _jobs_lock:
+            _jobs[job_id]['done'] = True
+        _push_event(job_id, 'error', str(e))
 
 
 @app.route('/industry/filter/start', methods=['POST'])

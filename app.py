@@ -1760,37 +1760,57 @@ def run_industry_filter_job(job_id, df, api_key):
     client = anthropic.Anthropic(api_key=api_key)
     total = len(df)
     df_rows = list(df.iterrows())
-    secteurs = [''] * total
+    secteurs = ['autre_cible'] * total
     raisons  = [''] * total
 
-    _push_event(job_id, 'progress', {'i': 0, 'total': total, 'status': 'classifying'})
+    # Phase 1 — submit Haiku batch (all leads at once, no rate limit concern)
+    _push_event(job_id, 'progress', {'i': 0, 'total': total, 'status': 'submitting'})
+    batch_requests = []
+    for i, (_, row) in enumerate(df_rows):
+        batch_requests.append({
+            'custom_id': str(i),
+            'params': {
+                'model': 'claude-haiku-4-5-20251001',
+                'max_tokens': 60,
+                'system': _FILTER_SYSTEM,
+                'messages': [{'role': 'user', 'content': _build_filter_msg(row)}],
+            },
+        })
+    batch = client.beta.messages.batches.create(requests=batch_requests)
+    batch_id = batch.id
 
-    def classify_one_indexed(i):
-        _, row = df_rows[i]
-        s, r = _classify_one(client, row)
-        return i, s, r
+    # Phase 2 — poll until Anthropic finishes
+    while True:
+        time.sleep(20)
+        batch = client.beta.messages.batches.retrieve(batch_id)
+        counts = batch.request_counts
+        done_count = counts.succeeded + counts.errored + counts.canceled + counts.expired
+        _push_event(job_id, 'progress', {
+            'i': done_count, 'total': total,
+            'status': 'waiting', 'done': done_count,
+        })
+        if batch.processing_status == 'ended':
+            break
 
-    workers = min(_API_WORKERS, total) if total else 1
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(classify_one_indexed, i): i for i in range(total)}
-        done_count = 0
-        for fut in as_completed(futures):
-            try:
-                i, s, r = fut.result()
-            except Exception:
-                i = futures[fut]
-                s, r = 'autre_cible', 'erreur'
-            secteurs[i] = s
-            raisons[i]  = r
-            done_count += 1
-            _, row = df_rows[i]
-            company = _s(row.get('company')) or _s(row.get('name')) or f'prospect {i+1}'
-            _push_event(job_id, 'result', {
-                'i': i, 'company': company, 'secteur': s, 'raison': r,
-                'done': done_count, 'total': total,
-            })
+    # Phase 3 — collect results
+    for result in client.beta.messages.batches.results(batch_id):
+        i = int(result.custom_id)
+        if result.result.type == 'succeeded':
+            text = result.result.message.content[0].text.strip()
+            s, r = 'autre_cible', ''
+            for line in text.split('\n'):
+                if line.startswith('SECTEUR:'):
+                    val = line.split(':', 1)[1].strip().lower()
+                    if val in _FILTER_VALID:
+                        s = val
+                elif line.startswith('RAISON:'):
+                    r = line.split(':', 1)[1].strip()
+        else:
+            s, r = 'autre_cible', 'erreur batch'
+        secteurs[i] = s
+        raisons[i]  = r
 
-    # Build output: keep everything except hors_cible, add audit columns
+    # Build output
     result_df = df.copy()
     result_df.insert(0, 'raison_filtre',  raisons)
     result_df.insert(0, 'secteur_filtre', secteurs)

@@ -366,7 +366,7 @@
 <div class="tab-panel" id="tab-industry">
   <div class="card">
     <p style="color:#aaa;font-size:0.85rem;margin-bottom:6px;">Analyse chaque prospect avec Claude Haiku et retire ceux qui sont clairement hors secteur industriel (restaurants, avocats, agences, etc.).</p>
-    <p style="color:#555;font-size:0.78rem;margin-bottom:20px;">Ultra-conservateur : en cas de doute, le prospect est conservé. Coût estimé : ~$0.0005 USD / prospect.</p>
+    <p style="color:#555;font-size:0.78rem;margin-bottom:20px;">Ultra-conservateur : en cas de doute, le prospect est conservé. Traitement en batch — coût estimé : ~$0.00025 USD / prospect.</p>
 
     <div class="field">
       <label>Clé API Anthropic</label>
@@ -391,17 +391,10 @@
 
     <div class="progress-section" id="indProgress" style="display:none">
       <div class="progress-header">
-        <span class="prog-label" id="indProgLabel">Initialisation...</span>
-        <span class="prog-count" id="indProgCount">0 / 0</span>
+        <span class="prog-label" id="indProgLabel">Envoi du batch à Anthropic...</span>
+        <span class="prog-count" id="indProgCount"></span>
       </div>
       <div class="progress-bar-track"><div class="progress-bar-fill" id="indProgBar"></div></div>
-
-      <div class="results-table-wrap">
-        <table class="results-table" style="table-layout:auto">
-          <thead><tr><th>Entreprise</th><th>Secteur</th><th>Raison</th></tr></thead>
-          <tbody id="indResultsBody"></tbody>
-        </table>
-      </div>
 
       <div id="indDoneStats" style="display:none;margin-top:16px;">
         <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);">
@@ -1132,28 +1125,20 @@ indBtn.addEventListener('click', async () => {
 
 function listenToIndustryJob(jobId, total) {
   const es = new EventSource(`/industry/filter/stream/${jobId}`);
-  const indRowMap = {};
 
   es.onmessage = (e) => {
     const ev = JSON.parse(e.data);
 
-    if (ev.type === 'result') {
+    if (ev.type === 'progress') {
       const d = ev.data;
-      const pct = Math.round((d.done / total) * 100);
-      document.getElementById('indProgBar').style.width = pct + '%';
-      document.getElementById('indProgCount').textContent = `${d.done} / ${total}`;
-      document.getElementById('indProgLabel').textContent = `Classification : ${d.company}`;
-
-      const color  = _SECTEUR_COLORS[d.secteur] || '#888';
-      const label  = _SECTEUR_LABELS[d.secteur] || d.secteur;
-      const badge  = `<span style="background:${color}22;color:${color};border:1px solid ${color}44;border-radius:4px;padding:2px 7px;font-size:0.75rem;white-space:nowrap">${label}</span>`;
-
-      if (!indRowMap[d.i]) {
-        const tr = document.createElement('tr');
-        tr.id = `ind-row-${d.i}`;
-        tr.innerHTML = `<td style="${d.secteur === 'hors_cible' ? 'color:#555;text-decoration:line-through' : ''}">${d.company}</td><td>${badge}</td><td style="color:#666;font-size:0.8rem">${d.raison}</td>`;
-        document.getElementById('indResultsBody').prepend(tr);
-        indRowMap[d.i] = tr;
+      if (d.status === 'submitting') {
+        document.getElementById('indProgLabel').textContent = `Batch envoyé à Anthropic — ${total} prospects en attente de traitement...`;
+        document.getElementById('indProgBar').style.width = '5%';
+      } else if (d.status === 'waiting') {
+        const pct = Math.max(5, Math.round((d.done / total) * 95));
+        document.getElementById('indProgBar').style.width = pct + '%';
+        document.getElementById('indProgLabel').textContent = `Anthropic traite le batch — ${d.done} / ${total} complétés`;
+        document.getElementById('indProgCount').textContent = `${d.done} / ${total}`;
       }
     }
 

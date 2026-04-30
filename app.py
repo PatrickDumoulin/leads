@@ -1706,9 +1706,24 @@ RÉPONDS EXACTEMENT en 2 lignes, rien d'autre :
 SECTEUR: [manufacturier|distribution|agroalimentaire|construction|autre_cible|hors_cible]
 RAISON: [5 à 10 mots expliquant la décision]"""
 
-_FILTER_SYSTEM = [{'type': 'text', 'text': _INDUSTRY_FILTER_PROMPT, 'cache_control': {'type': 'ephemeral'}}]
+_FOOD_FILTER_PROMPT = """Tu analyses des entreprises québécoises pour déterminer si elles font partie du secteur agroalimentaire industriel ou d'un secteur adjacent pertinent.
 
-_FILTER_VALID = {'manufacturier', 'distribution', 'agroalimentaire', 'construction', 'autre_cible', 'hors_cible'}
+RÈGLE ABSOLUE — ULTRA CONSERVATEUR : Vaut bien mieux garder une mauvaise cible qu'exclure une bonne cible alimentaire. En cas de doute, utilise TOUJOURS incertain.
+
+Codes :
+- alimentaire : transformation alimentaire industrielle (usine, conserverie, brasserie, fromagerie, abattoir, boulangerie industrielle, laiterie, meunerie, acériculteur commercial, cidrerie, distillerie, charcuterie industrielle), distribution alimentaire, nutraceutique, suppléments alimentaires, agriculture commerciale à grande échelle, emballage alimentaire, ingrédients alimentaires, alimentation animale industrielle
+- incertain : entreprise dont l'activité alimentaire est possible mais pas certaine — logistique générale pouvant inclure de l'alimentaire, emballage non-spécifié, équipements industriels polyvalents, secteur mixte avec composante alimentaire possible, transformation non-précisée. EN CAS DE DOUTE → incertain.
+- hors_alimentaire : UNIQUEMENT si CERTAIN que l'entreprise n'a aucun rapport avec la chaîne alimentaire — manufacturing non-alimentaire clair (aérospatial, auto, métal pur, pharmacie non-alimentaire, électronique), construction, TI pur, agence marketing pure, cabinet d'avocats, restaurant ou bar (service alimentaire, pas transformation industrielle). Si le moindre doute existe → incertain.
+
+RÉPONDS EXACTEMENT en 2 lignes, rien d'autre :
+SECTEUR: [alimentaire|incertain|hors_alimentaire]
+RAISON: [5 à 10 mots expliquant la décision]"""
+
+_FILTER_SYSTEM = [{'type': 'text', 'text': _INDUSTRY_FILTER_PROMPT, 'cache_control': {'type': 'ephemeral'}}]
+_FOOD_FILTER_SYSTEM = [{'type': 'text', 'text': _FOOD_FILTER_PROMPT, 'cache_control': {'type': 'ephemeral'}}]
+
+_FILTER_VALID      = {'manufacturier', 'distribution', 'agroalimentaire', 'construction', 'autre_cible', 'hors_cible'}
+_FOOD_FILTER_VALID = {'alimentaire', 'incertain', 'hors_alimentaire'}
 
 
 def _build_filter_msg(row):
@@ -1730,22 +1745,30 @@ def _build_filter_msg(row):
     return '\n'.join(parts)
 
 
-def _classify_one(client, row):
+def _classify_one(client, row, mode='general'):
     msg = _build_filter_msg(row)
+    if mode == 'alimentaire':
+        system = _FOOD_FILTER_SYSTEM
+        valid  = _FOOD_FILTER_VALID
+        default = 'incertain'
+    else:
+        system  = _FILTER_SYSTEM
+        valid   = _FILTER_VALID
+        default = 'autre_cible'
     for attempt in range(3):
         try:
             resp = client.messages.create(
                 model='claude-haiku-4-5-20251001',
                 max_tokens=60,
-                system=_FILTER_SYSTEM,
+                system=system,
                 messages=[{'role': 'user', 'content': msg}],
             )
             text = resp.content[0].text.strip()
-            secteur, raison = 'autre_cible', ''
+            secteur, raison = default, ''
             for line in text.split('\n'):
                 if line.startswith('SECTEUR:'):
                     val = line.split(':', 1)[1].strip().lower()
-                    if val in _FILTER_VALID:
+                    if val in valid:
                         secteur = val
                 elif line.startswith('RAISON:'):
                     raison = line.split(':', 1)[1].strip()
@@ -1753,15 +1776,16 @@ def _classify_one(client, row):
         except Exception:
             if attempt < 2:
                 time.sleep(3)
-    return 'autre_cible', 'erreur classification'
+    return default, 'erreur classification'
 
 
-def run_industry_filter_job(job_id, df, api_key):
+def run_industry_filter_job(job_id, df, api_key, mode='general'):
     try:
         client = anthropic.Anthropic(api_key=api_key)
         total = len(df)
         df_rows = list(df.iterrows())
-        secteurs = ['autre_cible'] * total
+        default = 'incertain' if mode == 'alimentaire' else 'autre_cible'
+        secteurs = [default] * total
         raisons  = [''] * total
         done_count = 0
 
@@ -1769,7 +1793,7 @@ def run_industry_filter_job(job_id, df, api_key):
 
         def classify_one_indexed(i):
             _, row = df_rows[i]
-            s, r = _classify_one(client, row)
+            s, r = _classify_one(client, row, mode=mode)
             return i, s, r
 
         workers = min(25, total) if total else 1
@@ -1780,7 +1804,7 @@ def run_industry_filter_job(job_id, df, api_key):
                     i, s, r = fut.result()
                 except Exception:
                     i = futures[fut]
-                    s, r = 'autre_cible', 'erreur'
+                    s, r = default, 'erreur'
                 secteurs[i] = s
                 raisons[i]  = r
                 done_count += 1
@@ -1789,8 +1813,13 @@ def run_industry_filter_job(job_id, df, api_key):
         result_df = df.copy()
         result_df.insert(0, 'raison_filtre',  raisons)
         result_df.insert(0, 'secteur_filtre', secteurs)
-        excluded = int(sum(1 for s in secteurs if s == 'hors_cible'))
-        kept_df  = result_df[result_df['secteur_filtre'] != 'hors_cible'].reset_index(drop=True)
+
+        if mode == 'alimentaire':
+            excl_val = 'hors_alimentaire'
+        else:
+            excl_val = 'hors_cible'
+        excluded = int(sum(1 for s in secteurs if s == excl_val))
+        kept_df  = result_df[result_df['secteur_filtre'] != excl_val].reset_index(drop=True)
         kept_df.to_csv(os.path.join(RESULTS_DIR, f'filter_{job_id}.csv'), index=False, encoding='utf-8-sig')
 
         with _jobs_lock:
@@ -1830,9 +1859,13 @@ def industry_filter_start():
     with _jobs_lock:
         _jobs[job_id] = {'events': [], 'done': False}
 
-    thread = threading.Thread(target=run_industry_filter_job, args=(job_id, df, api_key), daemon=True)
+    mode = request.form.get('mode', 'general')
+    if mode not in ('general', 'alimentaire'):
+        mode = 'general'
+
+    thread = threading.Thread(target=run_industry_filter_job, args=(job_id, df, api_key, mode), daemon=True)
     thread.start()
-    return jsonify({'job_id': job_id, 'total': len(df)})
+    return jsonify({'job_id': job_id, 'total': len(df), 'mode': mode})
 
 
 @app.route('/industry/filter/stream/<job_id>')

@@ -365,8 +365,13 @@
 <!-- ===================== TAB: INDUSTRY FILTER ===================== -->
 <div class="tab-panel" id="tab-industry">
   <div class="card">
-    <p style="color:#aaa;font-size:0.85rem;margin-bottom:6px;">Analyse chaque prospect avec Claude Haiku et retire ceux qui sont clairement hors secteur industriel (restaurants, avocats, agences, etc.).</p>
-    <p style="color:#555;font-size:0.78rem;margin-bottom:20px;">Ultra-conservateur : en cas de doute, le prospect est conservé. 25 appels parallèles — coût estimé : ~$0.0005 USD / prospect.</p>
+    <div class="field" style="margin-bottom:20px;">
+      <label>Mode de filtrage</label>
+      <div class="type-toggle" id="indModeToggle">
+        <button class="ind-mode-btn active" data-mode="general">Industriel général<span class="type-hint">Garde manufacturier, distribution, construction, alimentaire</span></button>
+        <button class="ind-mode-btn" data-mode="alimentaire">Alimentaire seulement<span class="type-hint">Garde uniquement les entreprises agroalimentaires</span></button>
+      </div>
+    </div>
 
     <div class="field">
       <label>Clé API Anthropic</label>
@@ -1029,6 +1034,15 @@ makeDbUploader({
 // ============================================================
 // INDUSTRY FILTER TAB
 // ============================================================
+let currentIndMode = 'general';
+document.querySelectorAll('.ind-mode-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.ind-mode-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentIndMode = btn.dataset.mode;
+  });
+});
+
 const indApiKey    = document.getElementById('indApiKey');
 const indDropzone  = document.getElementById('indDropzone');
 const indFileInput = document.getElementById('indFileInput');
@@ -1106,6 +1120,7 @@ indBtn.addEventListener('click', async () => {
   const fd = new FormData();
   fd.append('file', indFile);
   fd.append('api_key', indApiKey.value.trim());
+  fd.append('mode', currentIndMode);
   const limit = document.getElementById('indLimitInput').value.trim();
   if (limit) fd.append('limit', limit);
 

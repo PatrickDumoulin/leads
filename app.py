@@ -69,6 +69,8 @@ def check_auth():
     if request.endpoint in ('login', 'static', 'deploy_webhook'):
         return
     if not session.get('authenticated'):
+        if request.method != 'GET':
+            return jsonify({'error': 'Session expirée. Veuillez recharger la page et vous reconnecter.'}), 401
         return redirect('/login')
 
 
@@ -1680,6 +1682,191 @@ def icebreaker_download(job_id):
         as_attachment=True,
         download_name='prospects_icebreakers.csv',
     )
+
+
+# ---------------------------------------------------------------------------
+# Industry filter — classify leads and remove obvious off-sector targets
+# ---------------------------------------------------------------------------
+
+_INDUSTRY_FILTER_PROMPT = """Tu analyses des entreprises pour Sonoria afin de déterminer si elles font partie des secteurs industriels cibles.
+
+SECTEURS CIBLES : manufacturier, distribution/logistique, agroalimentaire (transformation industrielle), construction.
+
+RÈGLE ABSOLUE — ULTRA CONSERVATEUR : Vaut bien mieux garder une mauvaise cible qu'exclure une bonne. N'utilise hors_cible QUE si tu es CERTAIN à plus de 95% que l'entreprise n'a strictement aucun rapport avec le monde industriel.
+
+Codes disponibles :
+- manufacturier : fabrication, usinage, assemblage, métallurgie, électronique industrielle, pharmaceutique, dispositifs médicaux, aérospatial, automobile, automatisation industrielle, transformation industrielle, impression industrielle, équipements industriels
+- distribution : logistique, entreposage, transport de marchandises, grossiste, 3PL, supply chain, fret
+- agroalimentaire : transformation alimentaire industrielle, ferme de production, brasserie industrielle, fromagerie, abattoir, laiterie, conserverie
+- construction : bâtiment, génie civil, rénovation commerciale/industrielle, excavation, entrepreneur général, toiture commerciale, infrastructure
+- autre_cible : toute entreprise industrielle ou de services à l'industrie avec secteur flou — services B2B industriels, TI industriel, génie-conseil technique, énergie, environnement, recyclage, automatisation, maintenance industrielle, laboratoires, télécommunications industrielles. EN CAS DE DOUTE → autre_cible.
+- hors_cible : UNIQUEMENT si CERTAIN — restaurant, bar, café, épicerie de détail, salon de coiffure, galerie d'art, cabinet d'avocats, agence immobilière résidentielle, firme de finance/investissement, agence marketing/pub pure, école primaire/secondaire, artiste, influenceur, médecin en pratique privée. Si le moindre doute existe → autre_cible.
+
+RÉPONDS EXACTEMENT en 2 lignes, rien d'autre :
+SECTEUR: [manufacturier|distribution|agroalimentaire|construction|autre_cible|hors_cible]
+RAISON: [5 à 10 mots expliquant la décision]"""
+
+_FILTER_SYSTEM = [{'type': 'text', 'text': _INDUSTRY_FILTER_PROMPT, 'cache_control': {'type': 'ephemeral'}}]
+
+_FILTER_VALID = {'manufacturier', 'distribution', 'agroalimentaire', 'construction', 'autre_cible', 'hors_cible'}
+
+
+def _build_filter_msg(row):
+    company       = _s(row.get('company'))
+    headline      = _s(row.get('headline'))
+    job_title     = _s(row.get('job_title'))
+    linkedin_desc = _s(row.get('linkedin_description'))[:400]
+    linkedin_spec = _s(row.get('linkedin_specialities'))[:200]
+    summary       = _s(row.get('summary'))[:200]
+    job_desc      = _s(row.get('job_description'))[:200]
+
+    parts = [f'Entreprise: {company}']
+    if headline:      parts.append(f'Headline: {headline}')
+    if job_title:     parts.append(f'Titre du contact: {job_title}')
+    if linkedin_desc: parts.append(f'Description LinkedIn: {linkedin_desc}')
+    if linkedin_spec: parts.append(f'Spécialités LinkedIn: {linkedin_spec}')
+    if summary:       parts.append(f'Résumé du contact: {summary}')
+    if job_desc:      parts.append(f'Description du poste: {job_desc}')
+    return '\n'.join(parts)
+
+
+def _classify_one(client, row):
+    msg = _build_filter_msg(row)
+    for attempt in range(3):
+        try:
+            resp = client.messages.create(
+                model='claude-haiku-4-5-20251001',
+                max_tokens=60,
+                system=_FILTER_SYSTEM,
+                messages=[{'role': 'user', 'content': msg}],
+            )
+            text = resp.content[0].text.strip()
+            secteur, raison = 'autre_cible', ''
+            for line in text.split('\n'):
+                if line.startswith('SECTEUR:'):
+                    val = line.split(':', 1)[1].strip().lower()
+                    if val in _FILTER_VALID:
+                        secteur = val
+                elif line.startswith('RAISON:'):
+                    raison = line.split(':', 1)[1].strip()
+            return secteur, raison
+        except Exception:
+            if attempt < 2:
+                time.sleep(3)
+    return 'autre_cible', 'erreur classification'
+
+
+def run_industry_filter_job(job_id, df, api_key):
+    client = anthropic.Anthropic(api_key=api_key)
+    total = len(df)
+    df_rows = list(df.iterrows())
+    secteurs = [''] * total
+    raisons  = [''] * total
+
+    _push_event(job_id, 'progress', {'i': 0, 'total': total, 'status': 'classifying'})
+
+    def classify_one_indexed(i):
+        _, row = df_rows[i]
+        s, r = _classify_one(client, row)
+        return i, s, r
+
+    workers = min(_API_WORKERS, total) if total else 1
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = {ex.submit(classify_one_indexed, i): i for i in range(total)}
+        done_count = 0
+        for fut in as_completed(futures):
+            try:
+                i, s, r = fut.result()
+            except Exception:
+                i = futures[fut]
+                s, r = 'autre_cible', 'erreur'
+            secteurs[i] = s
+            raisons[i]  = r
+            done_count += 1
+            _, row = df_rows[i]
+            company = _s(row.get('company')) or _s(row.get('name')) or f'prospect {i+1}'
+            _push_event(job_id, 'result', {
+                'i': i, 'company': company, 'secteur': s, 'raison': r,
+                'done': done_count, 'total': total,
+            })
+
+    # Build output: keep everything except hors_cible, add audit columns
+    result_df = df.copy()
+    result_df.insert(0, 'raison_filtre',  raisons)
+    result_df.insert(0, 'secteur_filtre', secteurs)
+    excluded = int(sum(1 for s in secteurs if s == 'hors_cible'))
+    kept_df  = result_df[result_df['secteur_filtre'] != 'hors_cible'].reset_index(drop=True)
+    kept_df.to_csv(os.path.join(RESULTS_DIR, f'filter_{job_id}.csv'), index=False, encoding='utf-8-sig')
+
+    with _jobs_lock:
+        _jobs[job_id]['done'] = True
+    _push_event(job_id, 'done', {'kept': len(kept_df), 'excluded': excluded, 'total': total})
+
+
+@app.route('/industry/filter/start', methods=['POST'])
+def industry_filter_start():
+    api_key = request.form.get('api_key', '').strip()
+    if not api_key:
+        return jsonify({'error': 'Clé API Anthropic requise.'}), 400
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'Fichier requis.'}), 400
+    try:
+        df = read_file(file)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+    col_map = map_columns(df)
+    df = df.rename(columns=col_map)
+    for col in OUTPUT_COLUMNS:
+        if col not in df.columns:
+            df[col] = ''
+
+    limit = request.form.get('limit', '').strip()
+    if limit.isdigit() and int(limit) > 0:
+        df = df.head(int(limit))
+
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {'events': [], 'done': False}
+
+    thread = threading.Thread(target=run_industry_filter_job, args=(job_id, df, api_key), daemon=True)
+    thread.start()
+    return jsonify({'job_id': job_id, 'total': len(df)})
+
+
+@app.route('/industry/filter/stream/<job_id>')
+def industry_filter_stream(job_id):
+    def generate():
+        cursor = 0
+        while True:
+            with _jobs_lock:
+                job = _jobs.get(job_id)
+                if not job:
+                    yield f"data: {json.dumps({'type': 'error', 'data': 'Job introuvable'})}\n\n"
+                    return
+                events = job['events'][cursor:]
+                done = job['done']
+            for ev in events:
+                yield f"data: {json.dumps(ev)}\n\n"
+            cursor += len(events)
+            if done and not events:
+                return
+            if done:
+                return
+            time.sleep(0.3)
+
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/industry/filter/download/<job_id>')
+def industry_filter_download(job_id):
+    result_path = os.path.join(RESULTS_DIR, f'filter_{job_id}.csv')
+    if not os.path.exists(result_path):
+        return jsonify({'error': 'Résultat non disponible.'}), 404
+    return send_file(result_path, mimetype='text/csv', as_attachment=True,
+                     download_name='leads_filtres_secteur.csv')
 
 
 @app.route('/deploy', methods=['POST'])

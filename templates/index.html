@@ -220,6 +220,7 @@
   <button class="tab-btn active" data-tab="icebreaker">Icebreakers</button>
   <button class="tab-btn" data-tab="combine">Combiner</button>
   <button class="tab-btn" data-tab="filter">Filtrer</button>
+  <button class="tab-btn" data-tab="industry">Filtre secteur</button>
   <button class="tab-btn" data-tab="database">Base de données</button>
 </div>
 
@@ -358,6 +359,62 @@
     </div>
 
     <div class="error-box" id="filterError" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ===================== TAB: INDUSTRY FILTER ===================== -->
+<div class="tab-panel" id="tab-industry">
+  <div class="card">
+    <p style="color:#aaa;font-size:0.85rem;margin-bottom:6px;">Analyse chaque prospect avec Claude Haiku et retire ceux qui sont clairement hors secteur industriel (restaurants, avocats, agences, etc.).</p>
+    <p style="color:#555;font-size:0.78rem;margin-bottom:20px;">Ultra-conservateur : en cas de doute, le prospect est conservé. Coût estimé : ~$0.0005 USD / prospect.</p>
+
+    <div class="field">
+      <label>Clé API Anthropic</label>
+      <input type="password" id="indApiKey" placeholder="sk-ant-api03-..." autocomplete="off">
+    </div>
+
+    <div class="dropzone" id="indDropzone">
+      <input type="file" id="indFileInput" accept=".csv,.xlsx,.xls">
+      <div class="icon">📄</div>
+      <p><strong>Clique ou glisse ton fichier prospects</strong></p>
+      <p class="hint">CSV ou Excel — utilise la liste combinée</p>
+    </div>
+
+    <div class="file-list" id="indFileList"></div>
+
+    <div class="field" style="margin-top:16px;">
+      <label>Limiter à N prospects <span style="color:#555;font-weight:400">(optionnel — laisser vide pour tous)</span></label>
+      <input type="number" id="indLimitInput" placeholder="ex: 50" min="1" style="width:160px;">
+    </div>
+
+    <button class="btn-primary" id="indBtn" disabled>Analyser et filtrer par secteur</button>
+
+    <div class="progress-section" id="indProgress" style="display:none">
+      <div class="progress-header">
+        <span class="prog-label" id="indProgLabel">Initialisation...</span>
+        <span class="prog-count" id="indProgCount">0 / 0</span>
+      </div>
+      <div class="progress-bar-track"><div class="progress-bar-fill" id="indProgBar"></div></div>
+
+      <div class="results-table-wrap">
+        <table class="results-table" style="table-layout:auto">
+          <thead><tr><th>Entreprise</th><th>Secteur</th><th>Raison</th></tr></thead>
+          <tbody id="indResultsBody"></tbody>
+        </table>
+      </div>
+
+      <div id="indDoneStats" style="display:none;margin-top:16px;">
+        <div class="stats-grid" style="grid-template-columns:repeat(3,1fr);">
+          <div class="stat-box"><div class="stat-num" style="color:#1db954" id="indStatKept">—</div><div class="stat-label">Conservés</div></div>
+          <div class="stat-box"><div class="stat-num" style="color:#e05555" id="indStatExcl">—</div><div class="stat-label">Exclus (hors secteur)</div></div>
+          <div class="stat-box"><div class="stat-num" id="indStatTotal">—</div><div class="stat-label">Total analysés</div></div>
+        </div>
+      </div>
+
+      <button class="btn-green" id="indDownloadBtn" style="display:none">⬇ Télécharger les leads filtrés</button>
+    </div>
+
+    <div class="error-box" id="indError" style="display:none"></div>
   </div>
 </div>
 
@@ -974,6 +1031,160 @@ makeDbUploader({
   btnId: 'blAddBtn', resultsId: 'blAddResults', addedId: 'blResAdded', skippedId: 'blResSkipped',
   errorId: 'dbError', nameInputId: 'blListName', table: 'blacklist',
   btnLabel: 'Ajouter à la liste noire',
+});
+
+// ============================================================
+// INDUSTRY FILTER TAB
+// ============================================================
+const indApiKey    = document.getElementById('indApiKey');
+const indDropzone  = document.getElementById('indDropzone');
+const indFileInput = document.getElementById('indFileInput');
+const indFileList  = document.getElementById('indFileList');
+const indBtn       = document.getElementById('indBtn');
+const indProgress  = document.getElementById('indProgress');
+const indError     = document.getElementById('indError');
+const indDownloadBtn = document.getElementById('indDownloadBtn');
+let indFile = null;
+let indJobId = null;
+
+// Share API key with icebreaker tab via localStorage
+indApiKey.value = localStorage.getItem('sonoria_api_key') || '';
+indApiKey.addEventListener('input', () => {
+  localStorage.setItem('sonoria_api_key', indApiKey.value);
+  apiKeyInput.value = indApiKey.value;
+  checkIceBtn();
+  checkIndBtn();
+});
+apiKeyInput.addEventListener('input', () => { indApiKey.value = apiKeyInput.value; checkIndBtn(); });
+
+function checkIndBtn() {
+  indBtn.disabled = !(indFile && indApiKey.value.trim().startsWith('sk-'));
+}
+
+indDropzone.addEventListener('dragover', e => { e.preventDefault(); indDropzone.classList.add('drag-over'); });
+indDropzone.addEventListener('dragleave', () => indDropzone.classList.remove('drag-over'));
+indDropzone.addEventListener('drop', e => {
+  e.preventDefault(); indDropzone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) setIndFile(e.dataTransfer.files[0]);
+});
+indFileInput.addEventListener('change', () => { if (indFileInput.files[0]) setIndFile(indFileInput.files[0]); indFileInput.value = ''; });
+
+function setIndFile(f) {
+  indFile = f;
+  indFileList.innerHTML = `<div class="file-item"><span class="file-name">📄 ${f.name}</span><button class="remove-btn" id="indRemoveBtn">✕</button></div>`;
+  document.getElementById('indRemoveBtn').addEventListener('click', () => {
+    indFile = null; indFileList.innerHTML = ''; checkIndBtn();
+    indProgress.style.display = 'none'; indError.style.display = 'none';
+  });
+  checkIndBtn();
+}
+
+const _SECTEUR_COLORS = {
+  manufacturier:  '#6c63ff',
+  distribution:   '#00b4d8',
+  agroalimentaire:'#1db954',
+  construction:   '#e08855',
+  autre_cible:    '#888',
+  hors_cible:     '#e05555',
+};
+
+const _SECTEUR_LABELS = {
+  manufacturier:  'Manufacturier',
+  distribution:   'Distribution',
+  agroalimentaire:'Agroalimentaire',
+  construction:   'Construction',
+  autre_cible:    'Autre cible',
+  hors_cible:     'Hors cible',
+};
+
+indBtn.addEventListener('click', async () => {
+  if (!indFile || !indApiKey.value.trim()) return;
+  indBtn.disabled = true;
+  indBtn.innerHTML = '<span class="spinner"></span>Démarrage...';
+  indError.style.display = 'none';
+  indProgress.style.display = 'block';
+  indDownloadBtn.style.display = 'none';
+  document.getElementById('indDoneStats').style.display = 'none';
+  document.getElementById('indResultsBody').innerHTML = '';
+  document.getElementById('indProgBar').style.width = '0%';
+  document.getElementById('indProgLabel').textContent = 'Classification en cours...';
+  document.getElementById('indProgCount').textContent = '';
+
+  const fd = new FormData();
+  fd.append('file', indFile);
+  fd.append('api_key', indApiKey.value.trim());
+  const limit = document.getElementById('indLimitInput').value.trim();
+  if (limit) fd.append('limit', limit);
+
+  try {
+    const res = await fetch('/industry/filter/start', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
+    indJobId = data.job_id;
+    listenToIndustryJob(indJobId, data.total);
+  } catch(e) {
+    indError.textContent = '❌ ' + e.message;
+    indError.style.display = 'block';
+    indBtn.innerHTML = 'Analyser et filtrer par secteur';
+    indBtn.disabled = false;
+  }
+});
+
+function listenToIndustryJob(jobId, total) {
+  const es = new EventSource(`/industry/filter/stream/${jobId}`);
+  const indRowMap = {};
+
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+
+    if (ev.type === 'result') {
+      const d = ev.data;
+      const pct = Math.round((d.done / total) * 100);
+      document.getElementById('indProgBar').style.width = pct + '%';
+      document.getElementById('indProgCount').textContent = `${d.done} / ${total}`;
+      document.getElementById('indProgLabel').textContent = `Classification : ${d.company}`;
+
+      const color  = _SECTEUR_COLORS[d.secteur] || '#888';
+      const label  = _SECTEUR_LABELS[d.secteur] || d.secteur;
+      const badge  = `<span style="background:${color}22;color:${color};border:1px solid ${color}44;border-radius:4px;padding:2px 7px;font-size:0.75rem;white-space:nowrap">${label}</span>`;
+
+      if (!indRowMap[d.i]) {
+        const tr = document.createElement('tr');
+        tr.id = `ind-row-${d.i}`;
+        tr.innerHTML = `<td style="${d.secteur === 'hors_cible' ? 'color:#555;text-decoration:line-through' : ''}">${d.company}</td><td>${badge}</td><td style="color:#666;font-size:0.8rem">${d.raison}</td>`;
+        document.getElementById('indResultsBody').prepend(tr);
+        indRowMap[d.i] = tr;
+      }
+    }
+
+    if (ev.type === 'done') {
+      document.getElementById('indProgBar').style.width = '100%';
+      document.getElementById('indProgLabel').textContent = `Terminé — ${ev.data.kept} prospects conservés, ${ev.data.excluded} exclus`;
+      document.getElementById('indProgCount').textContent = `${ev.data.total} / ${ev.data.total}`;
+      document.getElementById('indStatKept').textContent  = ev.data.kept.toLocaleString('fr-CA');
+      document.getElementById('indStatExcl').textContent  = ev.data.excluded.toLocaleString('fr-CA');
+      document.getElementById('indStatTotal').textContent = ev.data.total.toLocaleString('fr-CA');
+      document.getElementById('indDoneStats').style.display = 'block';
+      indDownloadBtn.style.display = 'block';
+      indBtn.innerHTML = 'Analyser et filtrer par secteur';
+      indBtn.disabled = false;
+      es.close();
+    }
+
+    if (ev.type === 'error') {
+      indError.textContent = '❌ ' + ev.data;
+      indError.style.display = 'block';
+      indBtn.innerHTML = 'Analyser et filtrer par secteur';
+      indBtn.disabled = false;
+      es.close();
+    }
+  };
+
+  es.onerror = () => { es.close(); };
+}
+
+indDownloadBtn.addEventListener('click', () => {
+  if (indJobId) window.location = `/industry/filter/download/${indJobId}`;
 });
 </script>
 </body>

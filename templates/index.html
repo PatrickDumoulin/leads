@@ -431,7 +431,7 @@
     <div class="field">
       <label>Clé API Anthropic</label>
       <input type="password" id="campApiKey" placeholder="sk-ant-api03-..." autocomplete="off">
-      <div class="api-hint">Coût estimé: ~$0.0035 USD/prospect (~$12 pour 7 000 avec batch).</div>
+      <div class="api-hint">Coût estimé: ~$0.002 USD/prospect (~$14 pour 7 000 avec batch Sonnet).</div>
     </div>
 
     <div class="dropzone" id="campDropzone">
@@ -458,7 +458,6 @@
       <div class="progress-bar-track"><div class="progress-bar-fill" id="campProgBar"></div></div>
       <div class="phase-steps">
         <div class="phase-step" id="camp-phase-scraping">🌐 Scraping</div>
-        <div class="phase-step" id="camp-phase-haiku">🤖 Haiku batch</div>
         <div class="phase-step" id="camp-phase-sonnet">✨ Sonnet batch</div>
       </div>
       <button class="btn-green" id="campDownloadBtn" style="display:none;margin-top:16px;">⬇ Télécharger le CSV campagne</button>
@@ -1339,21 +1338,17 @@ function setCampFile(f) {
 
 const _CAMP_PHASE_LABELS = {
   scraping:          'Scraping des sites web...',
-  haiku_submitting:  'Envoi du batch Haiku à Anthropic...',
-  haiku_waiting:     'Batch Haiku en traitement',
   sonnet_submitting: 'Envoi du batch Sonnet à Anthropic...',
   sonnet_waiting:    'Batch Sonnet en traitement',
 };
 
 const _CAMP_PHASE_STEPS = {
   scraping:          'camp-phase-scraping',
-  haiku_submitting:  'camp-phase-haiku',
-  haiku_waiting:     'camp-phase-haiku',
   sonnet_submitting: 'camp-phase-sonnet',
   sonnet_waiting:    'camp-phase-sonnet',
 };
 
-const _CAMP_PHASE_ORDER = ['scraping', 'haiku_submitting', 'haiku_waiting', 'sonnet_submitting', 'sonnet_waiting'];
+const _CAMP_PHASE_ORDER = ['scraping', 'sonnet_submitting', 'sonnet_waiting'];
 
 function updateCampPhase(phase, done, total) {
   document.getElementById('campProgLabel').textContent = _CAMP_PHASE_LABELS[phase] || phase;
@@ -1369,11 +1364,9 @@ function updateCampPhase(phase, done, total) {
     else if (_CAMP_PHASE_STEPS[p] === activeStep) el.classList.add('active');
   });
 
-  const pct = phase === 'scraping'          ? (done ? Math.min(Math.round(done/total*20), 20) : 5)
-            : phase === 'haiku_submitting'  ? 20
-            : phase === 'haiku_waiting'     ? 20 + Math.round((done||0)/total*30)
-            : phase === 'sonnet_submitting' ? 50
-            : phase === 'sonnet_waiting'    ? 50 + Math.round((done||0)/total*45)
+  const pct = phase === 'scraping'          ? (done ? Math.min(Math.round(done/total*35), 35) : 5)
+            : phase === 'sonnet_submitting' ? 35
+            : phase === 'sonnet_waiting'    ? 35 + Math.round((done||0)/total*60)
             : 0;
   document.getElementById('campProgBar').style.width = pct + '%';
 }
@@ -1388,7 +1381,7 @@ campBtn.addEventListener('click', async () => {
   document.getElementById('campProgBar').style.width = '0%';
   document.getElementById('campProgLabel').textContent = 'Initialisation...';
   document.getElementById('campProgCount').textContent = '';
-  ['camp-phase-scraping', 'camp-phase-haiku', 'camp-phase-sonnet'].forEach(id => {
+  ['camp-phase-scraping', 'camp-phase-sonnet'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.className = 'phase-step';
   });
@@ -1420,7 +1413,7 @@ campBtn.addEventListener('click', async () => {
         document.getElementById('campProgBar').style.width = '100%';
         document.getElementById('campProgLabel').textContent = `Terminé — ${ev.data.total} prospects prêts`;
         document.getElementById('campProgCount').textContent = '';
-        ['camp-phase-scraping', 'camp-phase-haiku', 'camp-phase-sonnet'].forEach(id => {
+        ['camp-phase-scraping', 'camp-phase-sonnet'].forEach(id => {
           const el = document.getElementById(id);
           if (el) { el.classList.remove('active'); el.classList.add('done'); }
         });

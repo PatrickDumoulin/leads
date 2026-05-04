@@ -1944,19 +1944,20 @@ def industry_filter_download(job_id):
 
 _CAMPAIGN_SONNET_PROMPT = """Tu génères le hook principal d'un email B2B pour Sonoria (développement IA sur mesure pour entreprises industrielles québécoises).
 
-TON OBJECTIF: Écrire UNE idée d'implémentation IA centrée sur la GÉNÉRATION DE REVENUS — l'idée la plus convaincante possible pour que ce dirigeant veuille prendre un appel de 20 minutes.
+TON OBJECTIF: Écrire UNE idée d'implémentation IA centrée sur la GÉNÉRATION DE REVENUS, la plus convaincante possible pour que ce dirigeant veuille prendre un appel de 20 minutes.
 
 RÈGLES ABSOLUES:
 - Cadre en revenus : capturer des opportunités manquées, réduire des pertes de revenus, accélérer les cycles, augmenter le volume traité, protéger des contrats existants
-- DOIT citer un fait spécifique de l'entreprise (produit, marché, processus, technologie mentionnée dans les données)
+- Cite un fait spécifique de l'entreprise (produit, marché, processus, technologie). Si les données sont limitées, appuie-toi sur le nom de l'entreprise et le secteur pour inférer ce qu'ils font
 - Adapte au rôle : CFO → ROI / retour chiffré, Dir. opérations → capacité/throughput qui génère plus de revenus, VP ventes → pipeline/conversion/cycle, Dir. qualité → réduction des rejets ou recalls qui font perdre des clients
 - 2-3 phrases maximum
 - Commence directement par l'idée, sans formule d'introduction ni nom de la compagnie
 - Pas de CTA
 - Interdiction absolue du tiret cadratin (—) : utilise des virgules ou des points à la place
+- TOUJOURS générer une idée, même avec peu de données
 
-RÉPONDS EXACTEMENT DANS CE FORMAT:
-IDEE: [l'idée revenue — 2-3 phrases]"""
+RÉPONDS EXACTEMENT DANS CE FORMAT (une seule ligne):
+IDEE: [l'idée revenue en 2-3 phrases]"""
 
 _CAMPAIGN_SONNET_SYSTEM = [{'type': 'text', 'text': _CAMPAIGN_SONNET_PROMPT, 'cache_control': {'type': 'ephemeral'}}]
 
@@ -1967,6 +1968,7 @@ def _build_campaign_msg(row, web_content=None):
     location      = _s(row.get('location'))
     employees     = _s(row.get('linkedin_employees'))
     revenue       = _s(row.get('linkedin_company_revenue_range'))
+    secteur       = _s(row.get('secteur_filtre'))
     linkedin_desc = _s(row.get('linkedin_description'))[:400]
     linkedin_spec = _s(row.get('linkedin_specialities'))[:200]
     web_snippet   = (web_content or '')[:500]
@@ -1975,6 +1977,7 @@ def _build_campaign_msg(row, web_content=None):
     if location:      parts.append(f'Localisation: {location}')
     if employees:     parts.append(f'Taille: {employees} employés')
     if revenue:       parts.append(f'Revenus estimés: {revenue}')
+    if secteur:       parts.append(f'Secteur: {secteur}')
     if linkedin_spec: parts.append(f'Spécialités: {linkedin_spec}')
     if linkedin_desc: parts.append(f'Description LinkedIn: {linkedin_desc}')
     if web_snippet:   parts.append(f'Site web: {web_snippet}')
@@ -1982,17 +1985,34 @@ def _build_campaign_msg(row, web_content=None):
 
 
 def _parse_campaign_sonnet(text):
+    text = text.strip()
+    if not text:
+        return ''
+    # Try IDEE: / IDÉE: prefix (case-insensitive, with or without accent)
     for line in text.split('\n'):
-        if line.startswith('IDEE:'):
+        if line.upper().lstrip().startswith('IDEE:') or line.upper().lstrip().startswith('IDÉE:'):
             idee = line.split(':', 1)[1].strip()
             return idee.replace(' — ', ', ').replace('—', ', ')
-    return ''
+    # Fallback: join all substantial lines (Sonnet wrote the idea without the prefix)
+    lines = [l.strip() for l in text.split('\n') if len(l.strip()) > 30]
+    result = ' '.join(lines) if lines else text
+    return result.replace(' — ', ', ').replace('—', ', ')
 
 
 def run_campaign_job(job_id, df, api_key):
     try:
         client  = anthropic.Anthropic(api_key=api_key)
         total   = len(df)
+
+        # Pre-fill corporate_website from email domain when missing
+        for idx, row in df.iterrows():
+            if not _s(row.get('corporate_website')) and not _s(row.get('domain_name')):
+                email = _s(row.get('email'))
+                if '@' in email:
+                    domain = email.split('@')[1].strip()
+                    if domain:
+                        df.at[idx, 'corporate_website'] = 'https://' + domain
+
         df_rows = list(df.iterrows())
 
         # Phase 1 — scraping

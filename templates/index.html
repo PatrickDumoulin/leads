@@ -205,6 +205,12 @@
     .btn-delete-list:hover { background: rgba(220,50,50,0.12); border-color: #c0392b; color: #e05555; }
     .btn-delete-list:disabled { opacity: 0.4; cursor: not-allowed; }
 
+    /* Phase steps */
+    .phase-steps { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+    .phase-step { padding: 4px 12px; border-radius: 6px; font-size: 0.75rem; background: #22222e; border: 1px solid #2e2e40; color: #555; transition: all 0.3s; }
+    .phase-step.active { background: rgba(108,99,255,0.15); border-color: #6c63ff; color: #a78bfa; }
+    .phase-step.done { background: rgba(29,185,84,0.1); border-color: #1db954; color: #1db954; }
+
     /* Scrollbar */
     ::-webkit-scrollbar { width: 6px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -222,6 +228,7 @@
   <button class="tab-btn" data-tab="filter">Filtrer</button>
   <button class="tab-btn" data-tab="industry">Filtre secteur</button>
   <button class="tab-btn" data-tab="database">Base de données</button>
+  <button class="tab-btn" data-tab="campaign">Campagne IA</button>
 </div>
 
 <!-- ===================== TAB: COMBINE ===================== -->
@@ -413,6 +420,51 @@
     </div>
 
     <div class="error-box" id="indError" style="display:none"></div>
+  </div>
+</div>
+
+<!-- ===================== TAB: CAMPAIGN IA ===================== -->
+<div class="tab-panel" id="tab-campaign">
+  <div class="card">
+    <p style="color:#aaa;font-size:0.85rem;margin-bottom:20px;">Génère 3 idées d'implémentation IA ultra-spécifiques par prospect : la première centrée sur la <strong style="color:#6c63ff">génération de revenus</strong> (Sonnet), les deux autres sur l'optimisation (Haiku). Traitement en batch — résultats en quelques heures.</p>
+
+    <div class="field">
+      <label>Clé API Anthropic</label>
+      <input type="password" id="campApiKey" placeholder="sk-ant-api03-..." autocomplete="off">
+      <div class="api-hint">Coût estimé: ~$0.0035 USD/prospect (~$12 pour 7 000 avec batch).</div>
+    </div>
+
+    <div class="dropzone" id="campDropzone">
+      <input type="file" id="campFileInput" accept=".csv,.xlsx,.xls">
+      <div class="icon">📄</div>
+      <p><strong>Clique ou glisse ton fichier prospects</strong></p>
+      <p class="hint">CSV ou Excel — doit contenir site web et nom d'entreprise</p>
+    </div>
+
+    <div class="file-list" id="campFileList"></div>
+
+    <div class="field" style="margin-top:16px;">
+      <label>Limiter à N prospects <span style="color:#555;font-weight:400">(optionnel — laisser vide pour tous)</span></label>
+      <input type="number" id="campLimitInput" placeholder="ex: 50" min="1" style="width:160px;">
+    </div>
+
+    <button class="btn-primary" id="campBtn" disabled>Générer les idées IA</button>
+
+    <div class="progress-section" id="campProgress" style="display:none">
+      <div class="progress-header">
+        <span class="prog-label" id="campProgLabel">Initialisation...</span>
+        <span class="prog-count" id="campProgCount"></span>
+      </div>
+      <div class="progress-bar-track"><div class="progress-bar-fill" id="campProgBar"></div></div>
+      <div class="phase-steps">
+        <div class="phase-step" id="camp-phase-scraping">🌐 Scraping</div>
+        <div class="phase-step" id="camp-phase-haiku">🤖 Haiku batch</div>
+        <div class="phase-step" id="camp-phase-sonnet">✨ Sonnet batch</div>
+      </div>
+      <button class="btn-green" id="campDownloadBtn" style="display:none;margin-top:16px;">⬇ Télécharger le CSV campagne</button>
+    </div>
+
+    <div class="error-box" id="campError" style="display:none"></div>
   </div>
 </div>
 
@@ -631,6 +683,37 @@ const iceDownloadBtn = document.getElementById('iceDownloadBtn');
 const apiKeyInput = document.getElementById('apiKeyInput');
 let iceFile = null;
 let currentJobId = null;
+
+// Recovery: si un job était en cours ou terminé avant le refresh, le restaurer
+(async () => {
+  const savedId = localStorage.getItem('iceJobId');
+  if (!savedId) return;
+  try {
+    const res = await fetch(`/icebreaker/status/${savedId}`);
+    const data = await res.json();
+    if (data.done && data.total) {
+      currentJobId = savedId;
+      iceProgress.style.display = 'block';
+      const excl = (data.excluded || 0) > 0 ? ` (${data.excluded} hors cible exclus)` : '';
+      document.getElementById('progLabel').textContent = `Job précédent terminé — ${data.total} prospects exportés${excl}`;
+      document.getElementById('progCount').textContent = `${data.total} / ${data.total}`;
+      document.getElementById('progBar').style.width = '100%';
+      iceDownloadBtn.style.display = 'block';
+      localStorage.removeItem('iceJobId');
+    } else if (!data.done) {
+      // Job toujours en cours — se rebrancher
+      currentJobId = savedId;
+      iceProgress.style.display = 'block';
+      document.getElementById('progLabel').textContent = 'Reconnexion au job en cours...';
+      listenToJob(savedId, 0);
+    } else {
+      localStorage.removeItem('iceJobId');
+    }
+  } catch(e) {
+    localStorage.removeItem('iceJobId');
+  }
+})();
+
 let currentIceType = 'procedures';
 // Applique l'état initial du tableau selon le type par défaut
 document.querySelector('.results-table').classList.toggle('mode-proc', currentIceType === 'procedures');
@@ -715,6 +798,7 @@ iceBtn.addEventListener('click', async () => {
     if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
 
     currentJobId = data.job_id;
+    localStorage.setItem('iceJobId', currentJobId);
     const total = data.total;
     listenToJob(currentJobId, total);
   } catch(e) {
@@ -746,9 +830,13 @@ function listenToJob(jobId, total) {
         document.getElementById('progCount').textContent = `${done} / ${total}`;
         document.getElementById('progBar').style.width = Math.round(done / total * 100) + '%';
       } else {
-        document.getElementById('progCount').textContent = st === 'scraping' ? '' : `${ev.data.i + 1} / ${total}`;
+        document.getElementById('progCount').textContent = st === 'scraping'
+          ? (ev.data.scraped_done ? `${ev.data.scraped_done} / ${total}` : '')
+          : `${ev.data.i + 1} / ${total}`;
         document.getElementById('progLabel').textContent = st === 'scraping'
-          ? `Scraping des sites web en parallèle (${total} prospects)...`
+          ? (ev.data.scraped_done
+              ? `Scraping des sites web — ${ev.data.scraped_done} / ${total} complétés`
+              : `Scraping des sites web en parallèle (${total} prospects)...`)
           : st === 'generating' && !ev.data.company
           ? `Génération des icebreakers en parallèle...`
           : st === 'classifying' || st === 'generating'
@@ -798,6 +886,7 @@ function listenToJob(jobId, total) {
       iceDownloadBtn.style.display = 'block';
       iceBtn.innerHTML = 'Générer les icebreakers';
       iceBtn.disabled = false;
+      localStorage.removeItem('iceJobId');
       es.close();
     }
 
@@ -806,13 +895,28 @@ function listenToJob(jobId, total) {
       iceError.style.display = 'block';
       iceBtn.innerHTML = 'Générer les icebreakers';
       iceBtn.disabled = false;
+      localStorage.removeItem('iceJobId');
       es.close();
     }
   };
 
-  es.onerror = () => {
-    // SSE closed normally after done event
+  es.onerror = async () => {
     es.close();
+    if (!currentJobId) return;
+    try {
+      const res = await fetch(`/icebreaker/status/${currentJobId}`);
+      const data = await res.json();
+      if (data.done && data.total) {
+        const excl = (data.excluded || 0) > 0 ? ` (${data.excluded} hors cible exclus)` : '';
+        document.getElementById('progLabel').textContent = `Terminé — ${data.total} prospects exportés${excl}`;
+        document.getElementById('progCount').textContent = `${data.total} / ${data.total}`;
+        document.getElementById('progBar').style.width = '100%';
+        iceDownloadBtn.style.display = 'block';
+        iceBtn.innerHTML = 'Générer les icebreakers';
+        iceBtn.disabled = false;
+        localStorage.removeItem('iceJobId');
+      }
+    } catch(e) { /* silent */ }
   };
 }
 
@@ -1059,10 +1163,12 @@ indApiKey.value = localStorage.getItem('sonoria_api_key') || '';
 indApiKey.addEventListener('input', () => {
   localStorage.setItem('sonoria_api_key', indApiKey.value);
   apiKeyInput.value = indApiKey.value;
+  campApiKey.value  = indApiKey.value;
   checkIceBtn();
   checkIndBtn();
+  checkCampBtn();
 });
-apiKeyInput.addEventListener('input', () => { indApiKey.value = apiKeyInput.value; checkIndBtn(); });
+apiKeyInput.addEventListener('input', () => { indApiKey.value = apiKeyInput.value; campApiKey.value = apiKeyInput.value; checkIndBtn(); checkCampBtn(); });
 
 function checkIndBtn() {
   indBtn.disabled = !(indFile && indApiKey.value.trim().startsWith('sk-'));
@@ -1179,6 +1285,169 @@ function listenToIndustryJob(jobId, total) {
 
 indDownloadBtn.addEventListener('click', () => {
   if (indJobId) window.location = `/industry/filter/download/${indJobId}`;
+});
+
+// ============================================================
+// CAMPAIGN IA TAB
+// ============================================================
+const campApiKey     = document.getElementById('campApiKey');
+const campDropzone   = document.getElementById('campDropzone');
+const campFileInput  = document.getElementById('campFileInput');
+const campFileList   = document.getElementById('campFileList');
+const campBtn        = document.getElementById('campBtn');
+const campProgress   = document.getElementById('campProgress');
+const campError      = document.getElementById('campError');
+const campDownloadBtn = document.getElementById('campDownloadBtn');
+let campFile  = null;
+let campJobId = null;
+
+campApiKey.value = localStorage.getItem('sonoria_api_key') || '';
+campApiKey.addEventListener('input', () => {
+  localStorage.setItem('sonoria_api_key', campApiKey.value);
+  apiKeyInput.value = campApiKey.value;
+  indApiKey.value   = campApiKey.value;
+  checkIceBtn(); checkIndBtn(); checkCampBtn();
+});
+
+// Sync API key when switching to this tab
+document.querySelector('[data-tab="campaign"]').addEventListener('click', () => {
+  campApiKey.value = localStorage.getItem('sonoria_api_key') || '';
+  checkCampBtn();
+});
+
+function checkCampBtn() {
+  campBtn.disabled = !(campFile && campApiKey.value.trim().startsWith('sk-'));
+}
+
+campDropzone.addEventListener('dragover', e => { e.preventDefault(); campDropzone.classList.add('drag-over'); });
+campDropzone.addEventListener('dragleave', () => campDropzone.classList.remove('drag-over'));
+campDropzone.addEventListener('drop', e => {
+  e.preventDefault(); campDropzone.classList.remove('drag-over');
+  if (e.dataTransfer.files[0]) setCampFile(e.dataTransfer.files[0]);
+});
+campFileInput.addEventListener('change', () => { if (campFileInput.files[0]) setCampFile(campFileInput.files[0]); campFileInput.value = ''; });
+
+function setCampFile(f) {
+  campFile = f;
+  campFileList.innerHTML = `<div class="file-item"><span class="file-name">📄 ${f.name}</span><button class="remove-btn" id="campRemoveBtn">✕</button></div>`;
+  document.getElementById('campRemoveBtn').addEventListener('click', () => {
+    campFile = null; campFileList.innerHTML = ''; checkCampBtn();
+    campProgress.style.display = 'none'; campError.style.display = 'none';
+  });
+  checkCampBtn();
+}
+
+const _CAMP_PHASE_LABELS = {
+  scraping:          'Scraping des sites web...',
+  haiku_submitting:  'Envoi du batch Haiku à Anthropic...',
+  haiku_waiting:     'Batch Haiku en traitement',
+  sonnet_submitting: 'Envoi du batch Sonnet à Anthropic...',
+  sonnet_waiting:    'Batch Sonnet en traitement',
+};
+
+const _CAMP_PHASE_STEPS = {
+  scraping:          'camp-phase-scraping',
+  haiku_submitting:  'camp-phase-haiku',
+  haiku_waiting:     'camp-phase-haiku',
+  sonnet_submitting: 'camp-phase-sonnet',
+  sonnet_waiting:    'camp-phase-sonnet',
+};
+
+const _CAMP_PHASE_ORDER = ['scraping', 'haiku_submitting', 'haiku_waiting', 'sonnet_submitting', 'sonnet_waiting'];
+
+function updateCampPhase(phase, done, total) {
+  document.getElementById('campProgLabel').textContent = _CAMP_PHASE_LABELS[phase] || phase;
+  document.getElementById('campProgCount').textContent = (done !== undefined && total) ? `${done} / ${total}` : '';
+
+  const activeStep = _CAMP_PHASE_STEPS[phase];
+  const phaseIdx   = _CAMP_PHASE_ORDER.indexOf(phase);
+  _CAMP_PHASE_ORDER.forEach((p, idx) => {
+    const el = document.getElementById(_CAMP_PHASE_STEPS[p]);
+    if (!el) return;
+    el.classList.remove('active', 'done');
+    if (idx < phaseIdx) el.classList.add('done');
+    else if (_CAMP_PHASE_STEPS[p] === activeStep) el.classList.add('active');
+  });
+
+  const pct = phase === 'scraping'          ? (done ? Math.min(Math.round(done/total*20), 20) : 5)
+            : phase === 'haiku_submitting'  ? 20
+            : phase === 'haiku_waiting'     ? 20 + Math.round((done||0)/total*30)
+            : phase === 'sonnet_submitting' ? 50
+            : phase === 'sonnet_waiting'    ? 50 + Math.round((done||0)/total*45)
+            : 0;
+  document.getElementById('campProgBar').style.width = pct + '%';
+}
+
+campBtn.addEventListener('click', async () => {
+  if (!campFile || !campApiKey.value.trim()) return;
+  campBtn.disabled = true;
+  campBtn.innerHTML = '<span class="spinner"></span>Démarrage...';
+  campError.style.display = 'none';
+  campProgress.style.display = 'block';
+  campDownloadBtn.style.display = 'none';
+  document.getElementById('campProgBar').style.width = '0%';
+  document.getElementById('campProgLabel').textContent = 'Initialisation...';
+  document.getElementById('campProgCount').textContent = '';
+  ['camp-phase-scraping', 'camp-phase-haiku', 'camp-phase-sonnet'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.className = 'phase-step';
+  });
+
+  const fd = new FormData();
+  fd.append('file', campFile);
+  fd.append('api_key', campApiKey.value.trim());
+  const limit = document.getElementById('campLimitInput').value.trim();
+  if (limit) fd.append('limit', limit);
+
+  try {
+    const res  = await fetch('/campaign/start', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
+
+    campJobId   = data.job_id;
+    const total = data.total;
+    campBtn.innerHTML = 'Générer les idées IA';
+
+    const es = new EventSource(`/campaign/stream/${campJobId}`);
+    es.onmessage = (e) => {
+      const ev = JSON.parse(e.data);
+
+      if (ev.type === 'progress') {
+        updateCampPhase(ev.data.phase, ev.data.done, ev.data.total || total);
+      }
+
+      if (ev.type === 'done') {
+        document.getElementById('campProgBar').style.width = '100%';
+        document.getElementById('campProgLabel').textContent = `Terminé — ${ev.data.total} prospects prêts`;
+        document.getElementById('campProgCount').textContent = '';
+        ['camp-phase-scraping', 'camp-phase-haiku', 'camp-phase-sonnet'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) { el.classList.remove('active'); el.classList.add('done'); }
+        });
+        campDownloadBtn.style.display = 'block';
+        campBtn.disabled = false;
+        es.close();
+      }
+
+      if (ev.type === 'error') {
+        campError.textContent = '❌ ' + ev.data;
+        campError.style.display = 'block';
+        campBtn.disabled = false;
+        es.close();
+      }
+    };
+    es.onerror = () => { es.close(); };
+
+  } catch(e) {
+    campError.textContent = '❌ ' + e.message;
+    campError.style.display = 'block';
+    campBtn.innerHTML = 'Générer les idées IA';
+    campBtn.disabled = false;
+  }
+});
+
+campDownloadBtn.addEventListener('click', () => {
+  if (campJobId) window.location = `/campaign/download/${campJobId}`;
 });
 </script>
 </body>

@@ -1123,10 +1123,12 @@ _SCRAPE_WORKERS = 20
 _API_WORKERS    = 15
 
 
-def _scrape_all_parallel(df):
+def _scrape_all_parallel(df, job_id=None):
     """Scrape all prospect websites concurrently. Returns list[web_content|None]."""
     rows = list(df.iterrows())
     results = [None] * len(rows)
+    total = len(rows)
+    scraped_count = 0
 
     def scrape_one(args):
         idx, (_, row) = args
@@ -1135,7 +1137,7 @@ def _scrape_all_parallel(df):
             return idx, scrape_website(website)
         return idx, None
 
-    workers = min(_SCRAPE_WORKERS, len(rows)) if rows else 1
+    workers = min(_SCRAPE_WORKERS, total) if total else 1
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {ex.submit(scrape_one, item): item[0] for item in enumerate(rows)}
         for fut in as_completed(futures):
@@ -1144,6 +1146,12 @@ def _scrape_all_parallel(df):
                 results[idx] = content
             except Exception:
                 pass
+            scraped_count += 1
+            if job_id and scraped_count % 50 == 0:
+                _push_event(job_id, 'progress', {
+                    'i': scraped_count, 'total': total, 'company': '',
+                    'status': 'scraping', 'scraped_done': scraped_count,
+                })
     return results
 
 
@@ -1185,7 +1193,7 @@ def run_icebreaker_job(job_id, df, api_key, lang='fr'):
 
     # Pré-scraping parallèle — tous les sites en même temps
     _push_event(job_id, 'progress', {'i': 0, 'total': total, 'company': '', 'status': 'scraping'})
-    web_contents = _scrape_all_parallel(df)
+    web_contents = _scrape_all_parallel(df, job_id=job_id)
 
     for i, (_, row) in enumerate(df.iterrows()):
         company = _s(row.get('company')) or _s(row.get('name')) or f'prospect {i+1}'
@@ -1238,6 +1246,8 @@ def _save_job_csv(job_id, df, secteurs, normes, accroches, corps_list, icebreake
     excluded = int((df['secteur_detecte'] == 'hors_cible').sum())
     df = df[df['secteur_detecte'] != 'hors_cible'].reset_index(drop=True)
     df.to_csv(os.path.join(RESULTS_DIR, f'{job_id}.csv'), index=False, encoding='utf-8-sig')
+    with open(os.path.join(RESULTS_DIR, f'{job_id}.json'), 'w') as f:
+        json.dump({'total': len(df), 'excluded': excluded}, f)
     return len(df), excluded
 
 
@@ -1248,6 +1258,8 @@ def _save_procedures_csv(job_id, df, icebreakers, accroches_proc):
     df.insert(0, 'accroche_procedures', accroches_proc)
     df.insert(0, 'icebreaker',          icebreakers)
     df.to_csv(os.path.join(RESULTS_DIR, f'{job_id}.csv'), index=False, encoding='utf-8-sig')
+    with open(os.path.join(RESULTS_DIR, f'{job_id}.json'), 'w') as f:
+        json.dump({'total': len(df), 'excluded': 0}, f)
     return len(df)
 
 
@@ -1258,7 +1270,7 @@ def run_icebreaker_job_batch(job_id, df, api_key, lang='fr'):
 
     # Phase 1 — scraping parallèle de tous les sites
     _push_event(job_id, 'progress', {'i': 0, 'total': total, 'company': '', 'status': 'scraping'})
-    web_contents = _scrape_all_parallel(df)
+    web_contents = _scrape_all_parallel(df, job_id=job_id)
 
     # Phase 2 — submit Sonnet batch (1 request per prospect)
     _push_event(job_id, 'progress', {'i': 0, 'total': total, 'company': '', 'status': 'batch_submitting'})
@@ -1646,6 +1658,19 @@ def _icebreaker_start_inner():
 @app.route('/icebreaker/stream/<job_id>')
 def icebreaker_stream(job_id):
     def generate():
+        # Recovery: if job not in memory, check for completed sidecar on disk
+        with _jobs_lock:
+            job_exists = job_id in _jobs
+        if not job_exists:
+            meta_path = os.path.join(RESULTS_DIR, f'{job_id}.json')
+            if os.path.exists(meta_path):
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                yield f"data: {json.dumps({'type': 'done', 'data': meta})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'data': 'Job introuvable'})}\n\n"
+            return
+
         cursor = 0
         while True:
             with _jobs_lock:
@@ -1669,6 +1694,20 @@ def icebreaker_stream(job_id):
 
     return Response(stream_with_context(generate()), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/icebreaker/status/<job_id>')
+def icebreaker_status(job_id):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job:
+        return jsonify({'done': job['done']})
+    meta_path = os.path.join(RESULTS_DIR, f'{job_id}.json')
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            meta = json.load(f)
+        return jsonify({'done': True, **meta})
+    return jsonify({'error': 'Job introuvable'}), 404
 
 
 @app.route('/icebreaker/download/<job_id>')
@@ -1897,6 +1936,268 @@ def industry_filter_download(job_id):
         return jsonify({'error': 'Résultat non disponible.'}), 404
     return send_file(result_path, mimetype='text/csv', as_attachment=True,
                      download_name='leads_filtres_secteur.csv')
+
+
+# ---------------------------------------------------------------------------
+# Campaign IA — generate 3 ultra-specific AI ideas per prospect
+# ---------------------------------------------------------------------------
+
+_CAMPAIGN_HAIKU_PROMPT = """Tu analyses le profil d'une entreprise pour générer des idées d'implémentation IA ultra-spécifiques dans le cadre d'une campagne email B2B de Sonoria (développement logiciel IA sur mesure).
+
+TÂCHE 1 — PROFIL:
+Identifie ce que l'entreprise fait concrètement : produits fabriqués ou vendus, processus opérationnels clés mentionnés.
+
+TÂCHE 2 — 2 IDÉES D'OPTIMISATION:
+Génère 2 idées d'implémentation IA centrées sur l'ÉCONOMIE de temps, la RÉDUCTION D'ERREURS ou l'OPTIMISATION des opérations — adaptées au rôle du contact.
+
+RÈGLES ABSOLUES:
+- Chaque idée DOIT mentionner un fait spécifique de cette entreprise (produit, processus, marché, technologie, certification)
+- Adapte le langage au rôle : Dir. opérations → throughput/efficacité process, Dir. qualité → réduction rejets/erreurs, Dir. logistique → inventaire/délais, VP → vision stratégique
+- 2-3 phrases maximum par idée, jamais de CTA ni de conclusion
+- Jamais de formule générique comme "les entreprises de votre secteur..." — parle de CETTE entreprise
+- Si les données sont insuffisantes pour une 2e idée vraiment spécifique, fournis une seule idée solide plutôt que deux idées creuses (laisser IDEE3 vide)
+
+RÉPONDS EXACTEMENT DANS CE FORMAT:
+PRODUITS: [ce qu'ils fabriquent ou vendent — 1 ligne]
+PROCESSUS: [processus opérationnels clés — 1 ligne]
+IDEE2: [idée optimisation — 2-3 phrases]
+IDEE3: [idée optimisation — 2-3 phrases, ou vide si données insuffisantes]"""
+
+_CAMPAIGN_SONNET_PROMPT = """Tu génères le hook principal d'un email B2B pour Sonoria (développement IA sur mesure pour entreprises industrielles québécoises).
+
+TON OBJECTIF: Écrire UNE idée d'implémentation IA centrée sur la GÉNÉRATION DE REVENUS — l'idée la plus convaincante possible pour que ce dirigeant veuille prendre un appel de 20 minutes.
+
+RÈGLES ABSOLUES:
+- Cadre en revenus : capturer des opportunités manquées, réduire des pertes de revenus, accélérer les cycles, augmenter le volume traité, protéger des contrats existants
+- DOIT citer un fait spécifique de l'entreprise fourni dans le profil (produit, client, marché, processus)
+- Adapte au rôle : CFO → ROI / retour chiffré, Dir. opérations → capacité/throughput qui génère plus de revenus, VP ventes → pipeline/conversion/cycle, Dir. qualité → réduction des rejets ou recalls qui font perdre des clients
+- 2-3 phrases maximum
+- Commence directement par l'idée, sans formule d'introduction ni nom de la compagnie
+- Pas de CTA
+
+RÉPONDS EXACTEMENT DANS CE FORMAT:
+IDEE1: [l'idée revenue — 2-3 phrases]"""
+
+_CAMPAIGN_HAIKU_SYSTEM  = [{'type': 'text', 'text': _CAMPAIGN_HAIKU_PROMPT,  'cache_control': {'type': 'ephemeral'}}]
+_CAMPAIGN_SONNET_SYSTEM = [{'type': 'text', 'text': _CAMPAIGN_SONNET_PROMPT, 'cache_control': {'type': 'ephemeral'}}]
+
+
+def _build_campaign_haiku_msg(row, web_content=None):
+    company      = _s(row.get('company')) or "l'entreprise"
+    job_title    = _s(row.get('job_title')) or _s(row.get('result_title'))
+    location     = _s(row.get('location'))
+    employees    = _s(row.get('linkedin_employees'))
+    revenue      = _s(row.get('linkedin_company_revenue_range'))
+    linkedin_desc = _s(row.get('linkedin_description'))[:400]
+    linkedin_spec = _s(row.get('linkedin_specialities'))[:200]
+    web_snippet  = (web_content or '')[:500]
+
+    parts = [f'Entreprise: {company}', f'Titre du contact: {job_title}']
+    if location:      parts.append(f'Localisation: {location}')
+    if employees:     parts.append(f'Taille: {employees} employés')
+    if revenue:       parts.append(f'Revenus estimés: {revenue}')
+    if linkedin_spec: parts.append(f'Spécialités: {linkedin_spec}')
+    if linkedin_desc: parts.append(f'Description LinkedIn: {linkedin_desc}')
+    if web_snippet:   parts.append(f'Site web: {web_snippet}')
+    return '\n'.join(parts)
+
+
+def _build_campaign_sonnet_msg(row, haiku_profile):
+    company      = _s(row.get('company')) or "l'entreprise"
+    job_title    = _s(row.get('job_title')) or _s(row.get('result_title'))
+    linkedin_desc = _s(row.get('linkedin_description'))[:300]
+
+    parts = ['PROFIL EXTRAIT:', haiku_profile, '', f'Entreprise: {company}', f'Titre du contact: {job_title}']
+    if linkedin_desc: parts.append(f'Description LinkedIn: {linkedin_desc}')
+    return '\n'.join(parts)
+
+
+def _parse_campaign_haiku(text):
+    produits = processus = idee2 = idee3 = ''
+    for line in text.split('\n'):
+        if line.startswith('PRODUITS:'):
+            produits  = line.split(':', 1)[1].strip()
+        elif line.startswith('PROCESSUS:'):
+            processus = line.split(':', 1)[1].strip()
+        elif line.startswith('IDEE2:'):
+            idee2 = line.split(':', 1)[1].strip()
+        elif line.startswith('IDEE3:'):
+            idee3 = line.split(':', 1)[1].strip()
+    return produits, processus, idee2, idee3
+
+
+def _parse_campaign_sonnet(text):
+    for line in text.split('\n'):
+        if line.startswith('IDEE1:'):
+            return line.split(':', 1)[1].strip()
+    return ''
+
+
+def run_campaign_job(job_id, df, api_key):
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        total  = len(df)
+        df_rows = list(df.iterrows())
+
+        # Phase 1 — scraping
+        _push_event(job_id, 'progress', {'phase': 'scraping', 'done': 0, 'total': total})
+        web_contents = _scrape_all_parallel(df)
+        _push_event(job_id, 'progress', {'phase': 'scraping', 'done': total, 'total': total})
+
+        # Phase 2 — submit Haiku batch
+        _push_event(job_id, 'progress', {'phase': 'haiku_submitting', 'done': 0, 'total': total})
+        haiku_requests = []
+        for i, (_, row) in enumerate(df_rows):
+            haiku_requests.append({
+                'custom_id': str(i),
+                'params': {
+                    'model': 'claude-haiku-4-5-20251001',
+                    'max_tokens': 300,
+                    'system': _CAMPAIGN_HAIKU_SYSTEM,
+                    'messages': [{'role': 'user', 'content': _build_campaign_haiku_msg(row, web_contents[i])}],
+                },
+            })
+        haiku_batch    = client.beta.messages.batches.create(requests=haiku_requests)
+        haiku_batch_id = haiku_batch.id
+
+        # Phase 3 — poll Haiku batch
+        while True:
+            time.sleep(30)
+            haiku_batch = client.beta.messages.batches.retrieve(haiku_batch_id)
+            counts = haiku_batch.request_counts
+            done_n = counts.succeeded + counts.errored + counts.canceled + counts.expired
+            _push_event(job_id, 'progress', {'phase': 'haiku_waiting', 'done': done_n, 'total': total})
+            if haiku_batch.processing_status == 'ended':
+                break
+
+        # Phase 4 — collect Haiku results
+        produits_list  = [''] * total
+        processus_list = [''] * total
+        idee2_list     = [''] * total
+        idee3_list     = [''] * total
+        haiku_profiles = [''] * total
+
+        for result in client.beta.messages.batches.results(haiku_batch_id):
+            i = int(result.custom_id)
+            if result.result.type == 'succeeded':
+                p, proc, i2, i3 = _parse_campaign_haiku(result.result.message.content[0].text.strip())
+                produits_list[i]  = p
+                processus_list[i] = proc
+                idee2_list[i]     = i2
+                idee3_list[i]     = i3
+                parts = []
+                if p:    parts.append(f'PRODUITS: {p}')
+                if proc: parts.append(f'PROCESSUS: {proc}')
+                haiku_profiles[i] = '\n'.join(parts)
+
+        # Phase 5 — submit Sonnet batch
+        _push_event(job_id, 'progress', {'phase': 'sonnet_submitting', 'done': 0, 'total': total})
+        sonnet_requests = []
+        for i, (_, row) in enumerate(df_rows):
+            sonnet_requests.append({
+                'custom_id': str(i),
+                'params': {
+                    'model': 'claude-sonnet-4-6',
+                    'max_tokens': 160,
+                    'system': _CAMPAIGN_SONNET_SYSTEM,
+                    'messages': [{'role': 'user', 'content': _build_campaign_sonnet_msg(row, haiku_profiles[i])}],
+                },
+            })
+        sonnet_batch    = client.beta.messages.batches.create(requests=sonnet_requests)
+        sonnet_batch_id = sonnet_batch.id
+
+        # Phase 6 — poll Sonnet batch
+        while True:
+            time.sleep(30)
+            sonnet_batch = client.beta.messages.batches.retrieve(sonnet_batch_id)
+            counts = sonnet_batch.request_counts
+            done_n = counts.succeeded + counts.errored + counts.canceled + counts.expired
+            _push_event(job_id, 'progress', {'phase': 'sonnet_waiting', 'done': done_n, 'total': total})
+            if sonnet_batch.processing_status == 'ended':
+                break
+
+        # Phase 7 — collect Sonnet results
+        idee1_list = [''] * total
+        for result in client.beta.messages.batches.results(sonnet_batch_id):
+            i = int(result.custom_id)
+            if result.result.type == 'succeeded':
+                idee1_list[i] = _parse_campaign_sonnet(result.result.message.content[0].text.strip())
+
+        # Phase 8 — assemble and save CSV
+        result_df = df.copy()
+        result_df.insert(0, 'idee_3_efficacite', idee3_list)
+        result_df.insert(0, 'idee_2_efficacite', idee2_list)
+        result_df.insert(0, 'idee_1_revenu',     idee1_list)
+
+        out_path = os.path.join(RESULTS_DIR, f'campaign_{job_id}.csv')
+        result_df.to_csv(out_path, index=False, encoding='utf-8-sig')
+
+        with _jobs_lock:
+            _jobs[job_id]['done'] = True
+        _push_event(job_id, 'done', {'total': total})
+
+    except Exception as e:
+        with _jobs_lock:
+            _jobs[job_id]['done'] = True
+        _push_event(job_id, 'error', str(e))
+
+
+@app.route('/campaign/start', methods=['POST'])
+def campaign_start():
+    api_key = request.form.get('api_key', '').strip()
+    if not api_key:
+        return jsonify({'error': 'Clé API Anthropic requise.'}), 400
+    file = request.files.get('file')
+    if not file:
+        return jsonify({'error': 'Fichier requis.'}), 400
+    try:
+        df = read_file(file)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+    col_map = map_columns(df)
+    df = df.rename(columns=col_map)
+    for col in OUTPUT_COLUMNS:
+        if col not in df.columns:
+            df[col] = ''
+
+    limit = request.form.get('limit', '').strip()
+    if limit.isdigit() and int(limit) > 0:
+        df = df.head(int(limit))
+
+    job_id = str(uuid.uuid4())
+    with _jobs_lock:
+        _jobs[job_id] = {'events': [], 'done': False}
+
+    threading.Thread(target=run_campaign_job, args=(job_id, df, api_key), daemon=True).start()
+    return jsonify({'job_id': job_id, 'total': len(df)})
+
+
+@app.route('/campaign/stream/<job_id>')
+def campaign_stream(job_id):
+    def generate():
+        cursor = 0
+        while True:
+            with _jobs_lock:
+                events = _jobs.get(job_id, {}).get('events', [])
+                done   = _jobs.get(job_id, {}).get('done', False)
+            while cursor < len(events):
+                yield f"data: {json.dumps(events[cursor])}\n\n"
+                cursor += 1
+            if done and cursor >= len(events):
+                break
+            time.sleep(1)
+    return Response(stream_with_context(generate()), mimetype='text/event-stream',
+                    headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/campaign/download/<job_id>')
+def campaign_download(job_id):
+    result_path = os.path.join(RESULTS_DIR, f'campaign_{job_id}.csv')
+    if not os.path.exists(result_path):
+        return jsonify({'error': 'Résultat non disponible.'}), 404
+    return send_file(result_path, mimetype='text/csv', as_attachment=True,
+                     download_name='campagne_ia.csv')
 
 
 @app.route('/deploy', methods=['POST'])

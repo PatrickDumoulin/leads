@@ -21,6 +21,10 @@ Documents/
 # IDE
 .claude/
 
+# Logs
+deploy_log.txt
+watchdog_log.txt
+
 # Environnement (si ajouté plus tard)
 .env
 .env.local

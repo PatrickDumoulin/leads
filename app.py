@@ -1954,6 +1954,7 @@ RÈGLES ABSOLUES:
 - Commence directement par l'idée, sans formule d'introduction ni nom de la compagnie
 - Pas de CTA
 - Interdiction absolue du tiret cadratin (—) : utilise des virgules ou des points à la place
+- Inclus une dimension compétitive spécifique : comment ce système met l'entreprise en avance sur les concurrents qui ne l'ont pas encore. Rends-la concrète au contexte : ils détectent les opportunités plus tôt, ils répondent plus vite aux appels d'offres, ils protègent des clients que la concurrence cible, ils livrent plus vite, etc. Jamais de formule générique comme "vous serez meilleur que vos concurrents"
 - TOUJOURS générer une idée, même avec peu de données
 
 RÉPONDS EXACTEMENT DANS CE FORMAT (une seule ligne):

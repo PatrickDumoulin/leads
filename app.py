@@ -438,22 +438,27 @@ def scrape_website(url, timeout=8):
 
 SYSTEM_PROMPT = """Tu es un expert en copywriting B2B francophone qui rédige des icebreakers pour des emails de prospection froide.
 
-Le but: que le destinataire croie que l'expéditeur a vraiment visité leur site et fait une vraie recherche.
+Le but: que le destinataire sente que l'expéditeur a vraiment regardé SON profil, pas juste le site de son employeur.
 
 FORMAT OBLIGATOIRE - 1 seule phrase:
 Commence TOUJOURS par "Très intéressant" suivi SANS virgule d'une construction naturelle en français, par exemple:
-   - "Très intéressant le fait que [entreprise] [fait quelque chose de spécifique]."
-   - "Très intéressant ce focus sur [domaine spécifique] chez [entreprise]."
-   - "Très intéressant de voir [entreprise] [verbe + détail concret]."
+   - "Très intéressant que vous combiniez [compétence A] et [compétence B] dans un rôle [contexte]."
+   - "Très intéressant que vous ayez [fait notable sur le parcours du prospect]."
+   - "Très intéressant ce parcours de [A] vers [B] avant d'arriver chez [entreprise]."
+   - "Très intéressant le fait que [entreprise] [fait spécifique concret]."
+
+PRIORITÉ DES SOURCES:
+1. PROSPECT EN PREMIER: Si le profil LinkedIn du contact contient quelque chose de spécifique (transition de carrière, combinaison rare de compétences, ancienneté notable, double rôle, expertise technique pointue), base l'icebreaker sur LUI.
+2. COMPAGNIE EN FALLBACK: Si le profil du contact est trop vague ou générique, utilise un fait concret et spécifique sur la compagnie (produit, marché, certification, technologie, chiffre).
+Tu génères TOUJOURS la phrase, peu importe les données disponibles.
 
 RÈGLES:
-- Si le contenu du site web est disponible, utilise-le en priorité. Si non disponible, utilise la description LinkedIn, les spécialités et le titre de poste pour générer l'icebreaker. Tu génères TOUJOURS la phrase, peu importe les données disponibles. Ne dis JAMAIS que tu n'as pas accès au site ou que les données sont insuffisantes.
-- Sois CONCRET: cite un produit, un marché servi, une techno, un client type, un chiffre, une certification
-- Phrase courte, ton naturel - comme si tu l'avais tapé rapidement entre deux réunions
-- INTERDIT TOTAL ET ABSOLU: le caractère tiret long (le caractère Unicode U+2014). Ne l'utilise jamais, sous aucun prétexte.
-- INTERDIT TOTAL ET ABSOLU: le caractère tiret moyen (le caractère Unicode U+2013). Ne l'utilise jamais.
+- Sois CONCRET: cite une compétence réelle, un parcours, un produit, une techno, une certification, un chiffre précis
+- Phrase courte, ton naturel, comme si tu l'avais tapé rapidement entre deux réunions
+- INTERDIT TOTAL ET ABSOLU: le tiret long (Unicode U+2014) et le tiret moyen (Unicode U+2013). Jamais, sous aucun prétexte.
 - Utilise uniquement le trait d'union ordinaire (-) si tu as besoin d'un tiret.
-- INTERDIT: virgule après "Très intéressant", points-virgules, parenthèses, "innovant", "vision", "expertise", "passionné", "fier"
+- INTERDIT: virgule après "Très intéressant", points-virgules, parenthèses, "innovant", "vision", "expertise", "passionné", "fier", "fascinant"
+- Ne mentionne JAMAIS que le site ou les données ne sont pas disponibles
 - Retourne UNIQUEMENT cette phrase, rien d'autre"""
 
 SYSTEM_PROMPT_EN = """You are a B2B copywriting expert writing icebreakers for cold email prospecting.

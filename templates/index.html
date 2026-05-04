@@ -477,6 +477,7 @@
       </div>
       <div class="progress-bar-track"><div class="progress-bar-fill" id="campProgBar"></div></div>
       <div class="phase-steps">
+        <div class="phase-step" id="camp-phase-sector" style="display:none">🏭 Filtre secteur</div>
         <div class="phase-step" id="camp-phase-scraping">🌐 Scraping</div>
         <div class="phase-step" id="camp-phase-sonnet">✨ Sonnet batch</div>
       </div>
@@ -1356,19 +1357,23 @@ function setCampFile(f) {
   checkCampBtn();
 }
 
+let _campFilterSectorEnabled = false;
+
 const _CAMP_PHASE_LABELS = {
+  sector_filtering: 'Filtre secteur en cours...',
   scraping:          'Scraping des sites web...',
   sonnet_submitting: 'Envoi du batch Sonnet à Anthropic...',
   sonnet_waiting:    'Batch Sonnet en traitement',
 };
 
 const _CAMP_PHASE_STEPS = {
+  sector_filtering:  'camp-phase-sector',
   scraping:          'camp-phase-scraping',
   sonnet_submitting: 'camp-phase-sonnet',
   sonnet_waiting:    'camp-phase-sonnet',
 };
 
-const _CAMP_PHASE_ORDER = ['scraping', 'sonnet_submitting', 'sonnet_waiting'];
+const _CAMP_PHASE_ORDER = ['sector_filtering', 'scraping', 'sonnet_submitting', 'sonnet_waiting'];
 
 function updateCampPhase(phase, done, total) {
   document.getElementById('campProgLabel').textContent = _CAMP_PHASE_LABELS[phase] || phase;
@@ -1384,10 +1389,19 @@ function updateCampPhase(phase, done, total) {
     else if (_CAMP_PHASE_STEPS[p] === activeStep) el.classList.add('active');
   });
 
-  const pct = phase === 'scraping'          ? (done ? Math.min(Math.round(done/total*35), 35) : 5)
-            : phase === 'sonnet_submitting' ? 35
-            : phase === 'sonnet_waiting'    ? 35 + Math.round((done||0)/total*60)
-            : 0;
+  let pct;
+  if (_campFilterSectorEnabled) {
+    pct = phase === 'sector_filtering'  ? Math.min(Math.round((done||0)/total*25), 25)
+        : phase === 'scraping'          ? 25 + (done ? Math.min(Math.round(done/total*15), 15) : 2)
+        : phase === 'sonnet_submitting' ? 40
+        : phase === 'sonnet_waiting'    ? 40 + Math.round((done||0)/total*55)
+        : 0;
+  } else {
+    pct = phase === 'scraping'          ? (done ? Math.min(Math.round(done/total*35), 35) : 5)
+        : phase === 'sonnet_submitting' ? 35
+        : phase === 'sonnet_waiting'    ? 35 + Math.round((done||0)/total*60)
+        : 0;
+  }
   document.getElementById('campProgBar').style.width = pct + '%';
 }
 
@@ -1434,15 +1448,14 @@ campBtn.addEventListener('click', async () => {
   campStatsCard.style.display = 'none';
   campProgress.style.display = 'none';
 
-  const filterSector = document.getElementById('campFilterSector').checked;
-  const filterDb     = document.getElementById('campFilterDb').checked;
+  _campFilterSectorEnabled = document.getElementById('campFilterSector').checked;
+  const filterDb = document.getElementById('campFilterDb').checked;
 
   const fd = new FormData();
   fd.append('file', campFile);
   fd.append('api_key', campApiKey.value.trim());
   const limit = document.getElementById('campLimitInput').value.trim();
   if (limit) fd.append('limit', limit);
-  if (filterSector) fd.append('filter_sector', 'true');
   if (!filterDb) fd.append('skip_db_filter', 'true');
 
   try {
@@ -1454,13 +1467,7 @@ campBtn.addEventListener('click', async () => {
     document.getElementById('campStatsBefore').textContent  = data.before.toLocaleString('fr-CA');
     document.getElementById('campStatsRemoved').textContent = data.removed_db.toLocaleString('fr-CA');
     document.getElementById('campStatsAfter').textContent   = data.after.toLocaleString('fr-CA');
-
-    if (filterSector && data.removed_sector !== undefined) {
-      document.getElementById('campStatsSectorRemoved').textContent = data.removed_sector.toLocaleString('fr-CA');
-      campStatsSectorRow.style.display = '';
-    } else {
-      campStatsSectorRow.style.display = 'none';
-    }
+    campStatsSectorRow.style.display = 'none';
 
     campStatsCard.style.display = 'block';
     campBtn.innerHTML = 'Analyser la liste';
@@ -1484,7 +1491,9 @@ campConfirmBtn.addEventListener('click', async () => {
   document.getElementById('campProgBar').style.width = '0%';
   document.getElementById('campProgLabel').textContent = 'Initialisation...';
   document.getElementById('campProgCount').textContent = '';
-  ['camp-phase-scraping', 'camp-phase-sonnet'].forEach(id => {
+  const sectorEl = document.getElementById('camp-phase-sector');
+  if (sectorEl) sectorEl.style.display = _campFilterSectorEnabled ? '' : 'none';
+  ['camp-phase-sector', 'camp-phase-scraping', 'camp-phase-sonnet'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.className = 'phase-step';
   });
@@ -1492,6 +1501,7 @@ campConfirmBtn.addEventListener('click', async () => {
   const fd = new FormData();
   fd.append('api_key', campApiKey.value.trim());
   fd.append('preview_id', campPreviewId);
+  if (_campFilterSectorEnabled) fd.append('filter_sector', 'true');
 
   try {
     const res  = await fetch('/campaign/start', { method: 'POST', body: fd });

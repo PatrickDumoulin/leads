@@ -2032,7 +2032,7 @@ def _build_icebreaker_msg(row, web_content):
     return '\n'.join(context_parts) + f"\n\nGénère l'icebreaker pour {company}."
 
 
-def run_campaign_job(job_id, df, api_key):
+def run_campaign_job(job_id, df, api_key, filter_sector=False):
     try:
         client  = anthropic.Anthropic(api_key=api_key)
         total   = len(df)
@@ -2045,6 +2045,34 @@ def run_campaign_job(job_id, df, api_key):
                     domain = email.split('@')[1].strip()
                     if domain:
                         df.at[idx, 'corporate_website'] = 'https://' + domain
+
+        # Phase 0 — sector filter (optional, runs before scraping to save costs)
+        if filter_sector and total > 0:
+            _push_event(job_id, 'progress', {'phase': 'sector_filtering', 'done': 0, 'total': total})
+            rows_for_filter = list(df.iterrows())
+            secteurs   = ['autre_cible'] * total
+            done_count = 0
+
+            def _clf(i):
+                _, row = rows_for_filter[i]
+                s, _ = _classify_one(client, row, mode='general')
+                return i, s
+
+            workers = min(25, total)
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                futures = {ex.submit(_clf, i): i for i in range(total)}
+                for fut in as_completed(futures):
+                    try:
+                        i, s = fut.result()
+                        secteurs[i] = s
+                    except Exception:
+                        pass
+                    done_count += 1
+                    _push_event(job_id, 'progress', {'phase': 'sector_filtering', 'done': done_count, 'total': total})
+
+            keep = pd.Series([s != 'hors_cible' for s in secteurs])
+            df    = df[keep.values].reset_index(drop=True)
+            total = len(df)
 
         df_rows = list(df.iterrows())
 
@@ -2153,43 +2181,11 @@ def campaign_preview():
             df = db_filter_df(df)
         removed_db = before - len(df)
 
-        # Sector filter (optional, needs API key + Haiku calls)
-        removed_sector = None
-        if request.form.get('filter_sector') == 'true':
-            api_key = request.form.get('api_key', '').strip()
-            if not api_key:
-                return jsonify({'error': 'Clé API requise pour le filtre secteur.'}), 400
-            client = anthropic.Anthropic(api_key=api_key)
-            df_rows = list(df.iterrows())
-            total_s = len(df_rows)
-            secteurs = ['autre_cible'] * total_s
-
-            def _classify_idx(i):
-                _, row = df_rows[i]
-                s, _ = _classify_one(client, row, mode='general')
-                return i, s
-
-            workers = min(25, total_s) if total_s else 1
-            with ThreadPoolExecutor(max_workers=workers) as ex:
-                for fut in as_completed({ex.submit(_classify_idx, i): i for i in range(total_s)}):
-                    try:
-                        i, s = fut.result()
-                        secteurs[i] = s
-                    except Exception:
-                        pass
-
-            mask = pd.Series([s != 'hors_cible' for s in secteurs])
-            df = df[mask.values].reset_index(drop=True)
-            removed_sector = total_s - len(df)
-
         after = len(df)
         preview_id = str(uuid.uuid4())
         df.to_csv(os.path.join(RESULTS_DIR, f'campaign_preview_{preview_id}.csv'), index=False, encoding='utf-8-sig')
 
-        result = {'preview_id': preview_id, 'before': before, 'removed_db': removed_db, 'after': after}
-        if removed_sector is not None:
-            result['removed_sector'] = removed_sector
-        return jsonify(result)
+        return jsonify({'preview_id': preview_id, 'before': before, 'removed_db': removed_db, 'after': after})
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -2237,7 +2233,8 @@ def campaign_start():
     with _jobs_lock:
         _jobs[job_id] = {'events': [], 'done': False}
 
-    threading.Thread(target=run_campaign_job, args=(job_id, df, api_key), daemon=True).start()
+    filter_sector = request.form.get('filter_sector') == 'true'
+    threading.Thread(target=run_campaign_job, args=(job_id, df, api_key, filter_sector), daemon=True).start()
     return jsonify({'job_id': job_id, 'total': len(df)})
 
 

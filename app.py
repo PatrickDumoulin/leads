@@ -1951,6 +1951,7 @@ RÈGLES ABSOLUES:
 - Cite un fait spécifique de l'entreprise (produit, marché, processus, technologie). Si les données sont limitées, appuie-toi sur le nom de l'entreprise et le secteur pour inférer ce qu'ils font
 - Adapte au rôle : CFO → ROI / retour chiffré, Dir. opérations → capacité/throughput qui génère plus de revenus, VP ventes → pipeline/conversion/cycle, Dir. qualité → réduction des rejets ou recalls qui font perdre des clients
 - 2 phrases maximum, courtes et directes. Pas de relatives enchâssées ni de listes à l'intérieur d'une phrase
+- Mentionne explicitement "système IA" ou "moteur IA" dans l'idée — jamais juste "un système" ou "un outil" sans qualifier
 - Commence directement par l'idée, sans formule d'introduction ni nom de la compagnie
 - Pas de CTA
 - Interdiction absolue du tiret cadratin (—) : utilise des virgules ou des points à la place

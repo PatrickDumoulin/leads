@@ -426,12 +426,12 @@
 <!-- ===================== TAB: CAMPAIGN IA ===================== -->
 <div class="tab-panel" id="tab-campaign">
   <div class="card">
-    <p style="color:#aaa;font-size:0.85rem;margin-bottom:20px;">Génère 3 idées d'implémentation IA ultra-spécifiques par prospect : la première centrée sur la <strong style="color:#6c63ff">génération de revenus</strong> (Sonnet), les deux autres sur l'optimisation (Haiku). Traitement en batch — résultats en quelques heures.</p>
+    <p style="color:#aaa;font-size:0.85rem;margin-bottom:20px;">Génère par prospect : un <strong style="color:#6c63ff">icebreaker</strong> personnalisé (Haiku) et une <strong style="color:#6c63ff">idée IA revenue-first</strong> ultra-spécifique (Sonnet). Les deux batches tournent en parallèle — résultats en quelques heures.</p>
 
     <div class="field">
       <label>Clé API Anthropic</label>
       <input type="password" id="campApiKey" placeholder="sk-ant-api03-..." autocomplete="off">
-      <div class="api-hint">Coût estimé: ~$0.002 USD/prospect (~$14 pour 7 000 avec batch Sonnet).</div>
+      <div class="api-hint">Coût estimé: ~$0.0021 USD/prospect (~$15 pour 7 000 — Sonnet + Haiku en batch).</div>
     </div>
 
     <div class="dropzone" id="campDropzone">
@@ -448,7 +448,27 @@
       <input type="number" id="campLimitInput" placeholder="ex: 50" min="1" style="width:160px;">
     </div>
 
-    <button class="btn-primary" id="campBtn" disabled>Générer les idées IA</button>
+    <div class="field" style="margin-top:4px;display:flex;gap:24px;flex-wrap:wrap;">
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400;">
+        <input type="checkbox" id="campFilterDb" checked> Filtrer base de données (déjà contactés)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400;">
+        <input type="checkbox" id="campFilterSector"> Filtrer secteurs hors-cible (IA)
+      </label>
+    </div>
+
+    <button class="btn-primary" id="campBtn" disabled>Analyser la liste</button>
+
+    <div id="campStatsCard" style="display:none;margin-top:16px;background:#1a1a2e;border:1px solid #6c63ff33;border-radius:8px;padding:16px 20px;">
+      <p style="margin:0 0 12px;color:#aaa;font-size:0.82rem;letter-spacing:0.03em;">RÉSULTAT DU FILTRE</p>
+      <div style="display:flex;gap:32px;flex-wrap:wrap;align-items:flex-end;">
+        <div><div style="color:#aaa;font-size:0.75rem;margin-bottom:2px;">Avant filtre</div><strong id="campStatsBefore" style="font-size:1.5rem;color:#e0e0e0;">—</strong></div>
+        <div id="campStatsDbRow"><div style="color:#aaa;font-size:0.75rem;margin-bottom:2px;">Retirés (DB)</div><strong id="campStatsRemoved" style="font-size:1.5rem;color:#ff6b6b;">—</strong></div>
+        <div id="campStatsSectorRow" style="display:none;"><div style="color:#aaa;font-size:0.75rem;margin-bottom:2px;">Retirés (secteur)</div><strong id="campStatsSectorRemoved" style="font-size:1.5rem;color:#ff9966;">—</strong></div>
+        <div><div style="color:#aaa;font-size:0.75rem;margin-bottom:2px;">À traiter</div><strong id="campStatsAfter" style="font-size:1.5rem;color:#6c63ff;">—</strong></div>
+      </div>
+      <button class="btn-primary" id="campConfirmBtn" style="margin-top:16px;">Lancer la campagne</button>
+    </div>
 
     <div class="progress-section" id="campProgress" style="display:none">
       <div class="progress-header">
@@ -1371,11 +1391,94 @@ function updateCampPhase(phase, done, total) {
   document.getElementById('campProgBar').style.width = pct + '%';
 }
 
+const campStatsCard        = document.getElementById('campStatsCard');
+const campConfirmBtn       = document.getElementById('campConfirmBtn');
+const campStatsSectorRow   = document.getElementById('campStatsSectorRow');
+let campPreviewId = null;
+
+function _campStartStream(jobId, total) {
+  const es = new EventSource(`/campaign/stream/${jobId}`);
+  es.onmessage = (e) => {
+    const ev = JSON.parse(e.data);
+    if (ev.type === 'progress') {
+      updateCampPhase(ev.data.phase, ev.data.done, ev.data.total || total);
+    }
+    if (ev.type === 'done') {
+      document.getElementById('campProgBar').style.width = '100%';
+      document.getElementById('campProgLabel').textContent = `Terminé — ${ev.data.total} prospects traités`;
+      document.getElementById('campProgCount').textContent = '';
+      ['camp-phase-scraping', 'camp-phase-sonnet'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) { el.classList.remove('active'); el.classList.add('done'); }
+      });
+      campDownloadBtn.style.display = 'block';
+      campBtn.disabled = false;
+      es.close();
+    }
+    if (ev.type === 'error') {
+      campError.textContent = '❌ ' + ev.data;
+      campError.style.display = 'block';
+      campBtn.disabled = false;
+      es.close();
+    }
+  };
+  es.onerror = () => { es.close(); };
+}
+
+// Step 1: Analyse (preview + filter stats)
 campBtn.addEventListener('click', async () => {
   if (!campFile || !campApiKey.value.trim()) return;
   campBtn.disabled = true;
-  campBtn.innerHTML = '<span class="spinner"></span>Démarrage...';
+  campBtn.innerHTML = '<span class="spinner"></span>Analyse...';
   campError.style.display = 'none';
+  campStatsCard.style.display = 'none';
+  campProgress.style.display = 'none';
+
+  const filterSector = document.getElementById('campFilterSector').checked;
+  const filterDb     = document.getElementById('campFilterDb').checked;
+
+  const fd = new FormData();
+  fd.append('file', campFile);
+  fd.append('api_key', campApiKey.value.trim());
+  const limit = document.getElementById('campLimitInput').value.trim();
+  if (limit) fd.append('limit', limit);
+  if (filterSector) fd.append('filter_sector', 'true');
+  if (!filterDb) fd.append('skip_db_filter', 'true');
+
+  try {
+    const res  = await fetch('/campaign/preview', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
+
+    campPreviewId = data.preview_id;
+    document.getElementById('campStatsBefore').textContent  = data.before.toLocaleString('fr-CA');
+    document.getElementById('campStatsRemoved').textContent = data.removed_db.toLocaleString('fr-CA');
+    document.getElementById('campStatsAfter').textContent   = data.after.toLocaleString('fr-CA');
+
+    if (filterSector && data.removed_sector !== undefined) {
+      document.getElementById('campStatsSectorRemoved').textContent = data.removed_sector.toLocaleString('fr-CA');
+      campStatsSectorRow.style.display = '';
+    } else {
+      campStatsSectorRow.style.display = 'none';
+    }
+
+    campStatsCard.style.display = 'block';
+    campBtn.innerHTML = 'Analyser la liste';
+    campBtn.disabled  = false;
+  } catch(e) {
+    campError.textContent = '❌ ' + e.message;
+    campError.style.display = 'block';
+    campBtn.innerHTML = 'Analyser la liste';
+    campBtn.disabled  = false;
+  }
+});
+
+// Step 2: Confirm → start the batch job
+campConfirmBtn.addEventListener('click', async () => {
+  if (!campPreviewId || !campApiKey.value.trim()) return;
+  campConfirmBtn.disabled = true;
+  campConfirmBtn.innerHTML = '<span class="spinner"></span>Démarrage...';
+  campError.style.display  = 'none';
   campProgress.style.display = 'block';
   campDownloadBtn.style.display = 'none';
   document.getElementById('campProgBar').style.width = '0%';
@@ -1387,55 +1490,24 @@ campBtn.addEventListener('click', async () => {
   });
 
   const fd = new FormData();
-  fd.append('file', campFile);
   fd.append('api_key', campApiKey.value.trim());
-  const limit = document.getElementById('campLimitInput').value.trim();
-  if (limit) fd.append('limit', limit);
+  fd.append('preview_id', campPreviewId);
 
   try {
     const res  = await fetch('/campaign/start', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
 
-    campJobId   = data.job_id;
-    const total = data.total;
-    campBtn.innerHTML = 'Générer les idées IA';
-
-    const es = new EventSource(`/campaign/stream/${campJobId}`);
-    es.onmessage = (e) => {
-      const ev = JSON.parse(e.data);
-
-      if (ev.type === 'progress') {
-        updateCampPhase(ev.data.phase, ev.data.done, ev.data.total || total);
-      }
-
-      if (ev.type === 'done') {
-        document.getElementById('campProgBar').style.width = '100%';
-        document.getElementById('campProgLabel').textContent = `Terminé — ${ev.data.total} prospects prêts`;
-        document.getElementById('campProgCount').textContent = '';
-        ['camp-phase-scraping', 'camp-phase-sonnet'].forEach(id => {
-          const el = document.getElementById(id);
-          if (el) { el.classList.remove('active'); el.classList.add('done'); }
-        });
-        campDownloadBtn.style.display = 'block';
-        campBtn.disabled = false;
-        es.close();
-      }
-
-      if (ev.type === 'error') {
-        campError.textContent = '❌ ' + ev.data;
-        campError.style.display = 'block';
-        campBtn.disabled = false;
-        es.close();
-      }
-    };
-    es.onerror = () => { es.close(); };
-
+    campJobId = data.job_id;
+    campStatsCard.style.display = 'none';
+    campConfirmBtn.disabled = false;
+    campConfirmBtn.innerHTML = 'Lancer la campagne';
+    _campStartStream(data.job_id, data.total);
   } catch(e) {
     campError.textContent = '❌ ' + e.message;
     campError.style.display = 'block';
-    campBtn.innerHTML = 'Générer les idées IA';
-    campBtn.disabled = false;
+    campConfirmBtn.disabled = false;
+    campConfirmBtn.innerHTML = 'Lancer la campagne';
   }
 });
 

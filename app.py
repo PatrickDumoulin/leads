@@ -2001,6 +2001,32 @@ def _parse_campaign_sonnet(text):
     return result.replace(' — ', ', ').replace('—', ', ')
 
 
+def _build_icebreaker_msg(row, web_content):
+    company       = _s(row.get('company')) or "l'entreprise"
+    name          = _s(row.get('name'))
+    job_title     = _s(row.get('job_title')) or _s(row.get('result_title'))
+    headline      = _s(row.get('headline'))
+    job_desc      = _s(row.get('job_description'))
+    linkedin_desc = _s(row.get('linkedin_description'))
+    linkedin_spec = _s(row.get('linkedin_specialities'))
+    summary       = _s(row.get('summary'))
+    location      = _s(row.get('location'))
+
+    context_parts = [f"Entreprise: {company}"]
+    if name:          context_parts.append(f"Contact: {name}" + (f" ({job_title})" if job_title else ''))
+    if headline:      context_parts.append(f"Headline LinkedIn: {headline}")
+    if location:      context_parts.append(f"Localisation: {location}")
+    if linkedin_desc: context_parts.append(f"Description LinkedIn: {linkedin_desc[:500]}")
+    if linkedin_spec: context_parts.append(f"Spécialités LinkedIn: {linkedin_spec[:300]}")
+    if job_desc:      context_parts.append(f"Description du poste: {job_desc[:300]}")
+    if summary:       context_parts.append(f"Résumé du contact: {summary[:300]}")
+    if web_content:
+        context_parts.append(f"\nContenu du site web:\n{web_content[:800]}")
+    else:
+        context_parts.append("\nNote: aucun contenu de site web disponible. Tu dois quand même générer l'icebreaker en utilisant les informations LinkedIn ci-dessus. Ne mentionne jamais que le site n'est pas accessible.")
+    return '\n'.join(context_parts) + f"\n\nGénère l'icebreaker pour {company}."
+
+
 def run_campaign_job(job_id, df, api_key):
     try:
         client  = anthropic.Anthropic(api_key=api_key)
@@ -2022,9 +2048,10 @@ def run_campaign_job(job_id, df, api_key):
         web_contents = _scrape_all_parallel(df)
         _push_event(job_id, 'progress', {'phase': 'scraping', 'done': total, 'total': total})
 
-        # Phase 2 — submit Sonnet batch
+        # Phase 2 — submit Sonnet + Haiku batches simultaneously
         _push_event(job_id, 'progress', {'phase': 'sonnet_submitting', 'done': 0, 'total': total})
         sonnet_requests = []
+        haiku_requests  = []
         for i, (_, row) in enumerate(df_rows):
             sonnet_requests.append({
                 'custom_id': str(i),
@@ -2035,28 +2062,51 @@ def run_campaign_job(job_id, df, api_key):
                     'messages': [{'role': 'user', 'content': _build_campaign_msg(row, web_contents[i])}],
                 },
             })
+            haiku_requests.append({
+                'custom_id': str(i),
+                'params': {
+                    'model': 'claude-haiku-4-5-20251001',
+                    'max_tokens': 200,
+                    'system': [{'type': 'text', 'text': SYSTEM_PROMPT, 'cache_control': {'type': 'ephemeral'}}],
+                    'messages': [{'role': 'user', 'content': _build_icebreaker_msg(row, web_contents[i])}],
+                },
+            })
         sonnet_batch    = client.beta.messages.batches.create(requests=sonnet_requests)
+        haiku_batch     = client.beta.messages.batches.create(requests=haiku_requests)
         sonnet_batch_id = sonnet_batch.id
+        haiku_batch_id  = haiku_batch.id
 
-        # Phase 3 — poll Sonnet batch
+        # Phase 3 — poll both batches until both finish
         while True:
             time.sleep(30)
             sonnet_batch = client.beta.messages.batches.retrieve(sonnet_batch_id)
+            haiku_batch  = client.beta.messages.batches.retrieve(haiku_batch_id)
             counts = sonnet_batch.request_counts
             done_n = counts.succeeded + counts.errored + counts.canceled + counts.expired
             _push_event(job_id, 'progress', {'phase': 'sonnet_waiting', 'done': done_n, 'total': total})
-            if sonnet_batch.processing_status == 'ended':
+            if sonnet_batch.processing_status == 'ended' and haiku_batch.processing_status == 'ended':
                 break
 
         # Phase 4 — collect results and save CSV
-        idee_list = [''] * total
+        idee_list       = [''] * total
+        icebreaker_list = [''] * total
+
         for result in client.beta.messages.batches.results(sonnet_batch_id):
             i = int(result.custom_id)
             if result.result.type == 'succeeded':
                 idee_list[i] = _parse_campaign_sonnet(result.result.message.content[0].text.strip())
 
+        for result in client.beta.messages.batches.results(haiku_batch_id):
+            i = int(result.custom_id)
+            if result.result.type == 'succeeded':
+                text = result.result.message.content[0].text.strip()
+                for ch in ['—', '–', '‒', '―']:
+                    text = text.replace(ch, ' ')
+                icebreaker_list[i] = re.sub(r' {2,}', ' ', text).strip()
+
         result_df = df.copy()
         result_df.insert(0, 'idee_revenu', idee_list)
+        result_df.insert(0, 'icebreaker', icebreaker_list)
         result_df.to_csv(os.path.join(RESULTS_DIR, f'campaign_{job_id}.csv'), index=False, encoding='utf-8-sig')
 
         with _jobs_lock:
@@ -2069,11 +2119,8 @@ def run_campaign_job(job_id, df, api_key):
         _push_event(job_id, 'error', str(e))
 
 
-@app.route('/campaign/start', methods=['POST'])
-def campaign_start():
-    api_key = request.form.get('api_key', '').strip()
-    if not api_key:
-        return jsonify({'error': 'Clé API Anthropic requise.'}), 400
+@app.route('/campaign/preview', methods=['POST'])
+def campaign_preview():
     file = request.files.get('file')
     if not file:
         return jsonify({'error': 'Fichier requis.'}), 400
@@ -2091,6 +2138,94 @@ def campaign_start():
     limit = request.form.get('limit', '').strip()
     if limit.isdigit() and int(limit) > 0:
         df = df.head(int(limit))
+
+    before = len(df)
+
+    # DB filter (default on, unless explicitly skipped)
+    skip_db = request.form.get('skip_db_filter') == 'true'
+    if not skip_db:
+        df = db_filter_df(df)
+    removed_db = before - len(df)
+
+    # Sector filter (optional, needs API key + Haiku calls)
+    removed_sector = None
+    if request.form.get('filter_sector') == 'true':
+        api_key = request.form.get('api_key', '').strip()
+        if not api_key:
+            return jsonify({'error': 'Clé API requise pour le filtre secteur.'}), 400
+        try:
+            client = anthropic.Anthropic(api_key=api_key)
+            df_rows = list(df.iterrows())
+            total_s = len(df_rows)
+            secteurs = ['autre_cible'] * total_s
+
+            def _classify_idx(i):
+                _, row = df_rows[i]
+                s, _ = _classify_one(client, row, mode='general')
+                return i, s
+
+            workers = min(25, total_s) if total_s else 1
+            with ThreadPoolExecutor(max_workers=workers) as ex:
+                for fut in as_completed({ex.submit(_classify_idx, i): i for i in range(total_s)}):
+                    try:
+                        i, s = fut.result()
+                        secteurs[i] = s
+                    except Exception:
+                        pass
+
+            mask = pd.Series([s != 'hors_cible' for s in secteurs])
+            df = df[mask.values].reset_index(drop=True)
+            removed_sector = total_s - len(df)
+        except Exception as e:
+            return jsonify({'error': f'Erreur filtre secteur: {str(e)}'}), 500
+
+    after = len(df)
+    preview_id = str(uuid.uuid4())
+    df.to_csv(os.path.join(RESULTS_DIR, f'campaign_preview_{preview_id}.csv'), index=False, encoding='utf-8-sig')
+
+    result = {'preview_id': preview_id, 'before': before, 'removed_db': removed_db, 'after': after}
+    if removed_sector is not None:
+        result['removed_sector'] = removed_sector
+    return jsonify(result)
+
+
+@app.route('/campaign/start', methods=['POST'])
+def campaign_start():
+    api_key = request.form.get('api_key', '').strip()
+    if not api_key:
+        return jsonify({'error': 'Clé API Anthropic requise.'}), 400
+
+    preview_id = request.form.get('preview_id', '').strip()
+    if preview_id:
+        preview_path = os.path.join(RESULTS_DIR, f'campaign_preview_{preview_id}.csv')
+        if not os.path.exists(preview_path):
+            return jsonify({'error': 'Session expirée. Recommencez depuis le début.'}), 400
+        try:
+            df = pd.read_csv(preview_path, dtype=str).fillna('')
+        except Exception as e:
+            return jsonify({'error': str(e)}), 400
+        os.remove(preview_path)
+    else:
+        file = request.files.get('file')
+        if not file:
+            return jsonify({'error': 'Fichier requis.'}), 400
+        try:
+            df = read_file(file)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 400
+
+        col_map = map_columns(df)
+        df = df.rename(columns=col_map)
+        for col in OUTPUT_COLUMNS:
+            if col not in df.columns:
+                df[col] = ''
+
+        limit = request.form.get('limit', '').strip()
+        if limit.isdigit() and int(limit) > 0:
+            df = df.head(int(limit))
+
+    if len(df) == 0:
+        return jsonify({'error': 'Aucun prospect à traiter après filtrage.'}), 400
 
     job_id = str(uuid.uuid4())
     with _jobs_lock:

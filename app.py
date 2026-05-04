@@ -1950,7 +1950,7 @@ RÈGLES ABSOLUES:
 - Cadre en revenus : capturer des opportunités manquées, réduire des pertes de revenus, accélérer les cycles, augmenter le volume traité, protéger des contrats existants
 - Cite un fait spécifique de l'entreprise (produit, marché, processus, technologie). Si les données sont limitées, appuie-toi sur le nom de l'entreprise et le secteur pour inférer ce qu'ils font
 - Adapte au rôle : CFO → ROI / retour chiffré, Dir. opérations → capacité/throughput qui génère plus de revenus, VP ventes → pipeline/conversion/cycle, Dir. qualité → réduction des rejets ou recalls qui font perdre des clients
-- 2-3 phrases maximum
+- 2 phrases maximum, courtes et directes. Pas de relatives enchâssées ni de listes à l'intérieur d'une phrase
 - Commence directement par l'idée, sans formule d'introduction ni nom de la compagnie
 - Pas de CTA
 - Interdiction absolue du tiret cadratin (—) : utilise des virgules ou des points à la place

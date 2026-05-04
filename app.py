@@ -2028,7 +2028,7 @@ def run_campaign_job(job_id, df, api_key):
                 'custom_id': str(i),
                 'params': {
                     'model': 'claude-sonnet-4-6',
-                    'max_tokens': 160,
+                    'max_tokens': 220,
                     'system': _CAMPAIGN_SONNET_SYSTEM,
                     'messages': [{'role': 'user', 'content': _build_campaign_msg(row, web_contents[i])}],
                 },

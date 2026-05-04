@@ -2126,39 +2126,39 @@ def run_campaign_job(job_id, df, api_key):
 
 @app.route('/campaign/preview', methods=['POST'])
 def campaign_preview():
-    file = request.files.get('file')
-    if not file:
-        return jsonify({'error': 'Fichier requis.'}), 400
     try:
-        df = read_file(file)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 400
-
-    col_map = map_columns(df)
-    df = df.rename(columns=col_map)
-    for col in OUTPUT_COLUMNS:
-        if col not in df.columns:
-            df[col] = ''
-
-    limit = request.form.get('limit', '').strip()
-    if limit.isdigit() and int(limit) > 0:
-        df = df.head(int(limit))
-
-    before = len(df)
-
-    # DB filter (default on, unless explicitly skipped)
-    skip_db = request.form.get('skip_db_filter') == 'true'
-    if not skip_db:
-        df = db_filter_df(df)
-    removed_db = before - len(df)
-
-    # Sector filter (optional, needs API key + Haiku calls)
-    removed_sector = None
-    if request.form.get('filter_sector') == 'true':
-        api_key = request.form.get('api_key', '').strip()
-        if not api_key:
-            return jsonify({'error': 'Clé API requise pour le filtre secteur.'}), 400
+        file = request.files.get('file')
+        if not file:
+            return jsonify({'error': 'Fichier requis.'}), 400
         try:
+            df = read_file(file)
+        except Exception as e:
+            return jsonify({'error': str(e)}), 400
+
+        col_map = map_columns(df)
+        df = df.rename(columns=col_map)
+        for col in OUTPUT_COLUMNS:
+            if col not in df.columns:
+                df[col] = ''
+
+        limit = request.form.get('limit', '').strip()
+        if limit.isdigit() and int(limit) > 0:
+            df = df.head(int(limit))
+
+        before = len(df)
+
+        # DB filter (default on, unless explicitly skipped)
+        skip_db = request.form.get('skip_db_filter') == 'true'
+        if not skip_db:
+            df = db_filter_df(df)
+        removed_db = before - len(df)
+
+        # Sector filter (optional, needs API key + Haiku calls)
+        removed_sector = None
+        if request.form.get('filter_sector') == 'true':
+            api_key = request.form.get('api_key', '').strip()
+            if not api_key:
+                return jsonify({'error': 'Clé API requise pour le filtre secteur.'}), 400
             client = anthropic.Anthropic(api_key=api_key)
             df_rows = list(df.iterrows())
             total_s = len(df_rows)
@@ -2181,17 +2181,18 @@ def campaign_preview():
             mask = pd.Series([s != 'hors_cible' for s in secteurs])
             df = df[mask.values].reset_index(drop=True)
             removed_sector = total_s - len(df)
-        except Exception as e:
-            return jsonify({'error': f'Erreur filtre secteur: {str(e)}'}), 500
 
-    after = len(df)
-    preview_id = str(uuid.uuid4())
-    df.to_csv(os.path.join(RESULTS_DIR, f'campaign_preview_{preview_id}.csv'), index=False, encoding='utf-8-sig')
+        after = len(df)
+        preview_id = str(uuid.uuid4())
+        df.to_csv(os.path.join(RESULTS_DIR, f'campaign_preview_{preview_id}.csv'), index=False, encoding='utf-8-sig')
 
-    result = {'preview_id': preview_id, 'before': before, 'removed_db': removed_db, 'after': after}
-    if removed_sector is not None:
-        result['removed_sector'] = removed_sector
-    return jsonify(result)
+        result = {'preview_id': preview_id, 'before': before, 'removed_db': removed_db, 'after': after}
+        if removed_sector is not None:
+            result['removed_sector'] = removed_sector
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/campaign/start', methods=['POST'])

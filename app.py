@@ -2172,11 +2172,15 @@ def run_campaign_job(job_id, df, api_key, filter_sector=False):
         # Phase 4 — collect results and save CSV
         idee_list       = [''] * total
         icebreaker_list = [''] * total
+        sonnet_retry    = []
+        haiku_retry     = []
 
         for result in client.beta.messages.batches.results(sonnet_batch_id):
             i = int(result.custom_id)
             if result.result.type == 'succeeded' and result.result.message.content:
                 idee_list[i] = _parse_campaign_sonnet(result.result.message.content[0].text.strip())
+            else:
+                sonnet_retry.append(i)
 
         for result in client.beta.messages.batches.results(haiku_batch_id):
             i = int(result.custom_id)
@@ -2185,6 +2189,41 @@ def run_campaign_job(job_id, df, api_key, filter_sector=False):
                 for ch in ['—', '–', '‒', '―']:
                     text = text.replace(ch, ' ')
                 icebreaker_list[i] = re.sub(r' {2,}', ' ', text).strip()
+            else:
+                haiku_retry.append(i)
+
+        # Retry any failed/empty results synchronously
+        if sonnet_retry or haiku_retry:
+            _push_event(job_id, 'progress', {'phase': 'retry', 'done': 0, 'total': len(sonnet_retry) + len(haiku_retry)})
+        for idx, i in enumerate(sonnet_retry):
+            _, row = df_rows[i]
+            try:
+                resp = client.messages.create(
+                    model='claude-sonnet-4-6', max_tokens=220,
+                    system=_CAMPAIGN_SONNET_SYSTEM,
+                    messages=[{'role': 'user', 'content': _build_campaign_msg(row, web_contents[i])}],
+                )
+                if resp.content:
+                    idee_list[i] = _parse_campaign_sonnet(resp.content[0].text.strip())
+            except Exception:
+                pass
+            _push_event(job_id, 'progress', {'phase': 'retry', 'done': idx + 1, 'total': len(sonnet_retry) + len(haiku_retry)})
+        for idx, i in enumerate(haiku_retry):
+            _, row = df_rows[i]
+            try:
+                resp = client.messages.create(
+                    model='claude-haiku-4-5-20251001', max_tokens=200,
+                    system=[{'type': 'text', 'text': SYSTEM_PROMPT, 'cache_control': {'type': 'ephemeral'}}],
+                    messages=[{'role': 'user', 'content': _build_icebreaker_msg(row, web_contents[i])}],
+                )
+                if resp.content:
+                    text = resp.content[0].text.strip()
+                    for ch in ['—', '–', '‒', '―']:
+                        text = text.replace(ch, ' ')
+                    icebreaker_list[i] = re.sub(r' {2,}', ' ', text).strip()
+            except Exception:
+                pass
+            _push_event(job_id, 'progress', {'phase': 'retry', 'done': len(sonnet_retry) + idx + 1, 'total': len(sonnet_retry) + len(haiku_retry)})
 
         result_df = df.copy()
         result_df.insert(0, 'idee_revenu', idee_list)

@@ -2154,6 +2154,10 @@ def run_campaign_job(job_id, df, api_key, filter_sector=False):
         sonnet_batch_id = sonnet_batch.id
         haiku_batch_id  = haiku_batch.id
 
+        # Persist batch IDs immediately so Phase 4 can be retried on crash
+        with open(os.path.join(RESULTS_DIR, f'campaign_{job_id}.batches.json'), 'w') as f:
+            json.dump({'sonnet_batch_id': sonnet_batch_id, 'haiku_batch_id': haiku_batch_id, 'total': total}, f)
+
         # Phase 3 — poll both batches until both finish
         while True:
             time.sleep(30)
@@ -2171,12 +2175,12 @@ def run_campaign_job(job_id, df, api_key, filter_sector=False):
 
         for result in client.beta.messages.batches.results(sonnet_batch_id):
             i = int(result.custom_id)
-            if result.result.type == 'succeeded':
+            if result.result.type == 'succeeded' and result.result.message.content:
                 idee_list[i] = _parse_campaign_sonnet(result.result.message.content[0].text.strip())
 
         for result in client.beta.messages.batches.results(haiku_batch_id):
             i = int(result.custom_id)
-            if result.result.type == 'succeeded':
+            if result.result.type == 'succeeded' and result.result.message.content:
                 text = result.result.message.content[0].text.strip()
                 for ch in ['—', '–', '‒', '―']:
                     text = text.replace(ch, ' ')

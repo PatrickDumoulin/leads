@@ -1319,9 +1319,33 @@ const campProgress   = document.getElementById('campProgress');
 const campError      = document.getElementById('campError');
 const campDownloadBtn = document.getElementById('campDownloadBtn');
 let campFile  = null;
-let campJobId = null;
+let campJobId = localStorage.getItem('camp_job_id') || null;
 
 campApiKey.value = localStorage.getItem('sonoria_api_key') || '';
+
+// On load: restore in-progress campaign if page was refreshed mid-job
+(async () => {
+  if (!campJobId) return;
+  try {
+    const res = await fetch(`/campaign/status/${campJobId}`);
+    const data = await res.json();
+    if (data.done && data.total != null) {
+      campProgress.style.display = 'block';
+      document.getElementById('campProgBar').style.width = '100%';
+      document.getElementById('campProgLabel').textContent = `Terminé — ${data.total} prospects traités`;
+      document.getElementById('campProgCount').textContent = '';
+      campDownloadBtn.style.display = 'block';
+      localStorage.removeItem('camp_job_id');
+    } else if (!data.done) {
+      campProgress.style.display = 'block';
+      document.getElementById('campProgLabel').textContent = 'Batch en traitement...';
+      _campStartStream(campJobId, null);
+    } else {
+      localStorage.removeItem('camp_job_id');
+      campJobId = null;
+    }
+  } catch(e) { localStorage.removeItem('camp_job_id'); campJobId = null; }
+})();
 campApiKey.addEventListener('input', () => {
   localStorage.setItem('sonoria_api_key', campApiKey.value);
   apiKeyInput.value = campApiKey.value;
@@ -1427,6 +1451,7 @@ function _campStartStream(jobId, total) {
       });
       campDownloadBtn.style.display = 'block';
       campBtn.disabled = false;
+      localStorage.removeItem('camp_job_id');
       es.close();
     }
     if (ev.type === 'error') {
@@ -1436,7 +1461,28 @@ function _campStartStream(jobId, total) {
       es.close();
     }
   };
-  es.onerror = () => { /* let EventSource auto-reconnect */ };
+  es.onerror = async () => {
+    es.close();
+    if (!jobId) return;
+    try {
+      const res = await fetch(`/campaign/status/${jobId}`);
+      const data = await res.json();
+      if (data.done && data.total != null) {
+        document.getElementById('campProgBar').style.width = '100%';
+        document.getElementById('campProgLabel').textContent = `Terminé — ${data.total} prospects traités`;
+        document.getElementById('campProgCount').textContent = '';
+        ['camp-phase-scraping', 'camp-phase-sonnet'].forEach(id => {
+          const el = document.getElementById(id);
+          if (el) { el.classList.remove('active'); el.classList.add('done'); }
+        });
+        campDownloadBtn.style.display = 'block';
+        campBtn.disabled = false;
+        localStorage.removeItem('camp_job_id');
+      } else if (!data.done) {
+        setTimeout(() => _campStartStream(jobId, total), 3000);
+      }
+    } catch(e) { /* silent */ }
+  };
 }
 
 // Step 1: Analyse (preview + filter stats)
@@ -1509,6 +1555,7 @@ campConfirmBtn.addEventListener('click', async () => {
     if (!res.ok || data.error) throw new Error(data.error || 'Erreur inconnue');
 
     campJobId = data.job_id;
+    localStorage.setItem('camp_job_id', campJobId);
     campStatsCard.style.display = 'none';
     campConfirmBtn.disabled = false;
     campConfirmBtn.innerHTML = 'Lancer la campagne';

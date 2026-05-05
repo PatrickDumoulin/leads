@@ -2186,15 +2186,17 @@ def run_campaign_job(job_id, df, api_key, filter_sector=False):
         result_df.insert(0, 'idee_revenu', idee_list)
         result_df.insert(0, 'icebreaker', icebreaker_list)
         result_df.to_csv(os.path.join(RESULTS_DIR, f'campaign_{job_id}.csv'), index=False, encoding='utf-8-sig')
+        with open(os.path.join(RESULTS_DIR, f'campaign_{job_id}.json'), 'w') as f:
+            json.dump({'total': total}, f)
 
         with _jobs_lock:
+            _jobs[job_id]['events'].append({'type': 'done', 'data': {'total': total}})
             _jobs[job_id]['done'] = True
-        _push_event(job_id, 'done', {'total': total})
 
     except Exception as e:
         with _jobs_lock:
+            _jobs[job_id]['events'].append({'type': 'error', 'data': str(e)})
             _jobs[job_id]['done'] = True
-        _push_event(job_id, 'error', str(e))
 
 
 @app.route('/campaign/preview', methods=['POST'])
@@ -2286,6 +2288,19 @@ def campaign_start():
 @app.route('/campaign/stream/<job_id>')
 def campaign_stream(job_id):
     def generate():
+        # Recovery: if job not in memory, check completed sidecar on disk
+        with _jobs_lock:
+            job_exists = job_id in _jobs
+        if not job_exists:
+            meta_path = os.path.join(RESULTS_DIR, f'campaign_{job_id}.json')
+            if os.path.exists(meta_path):
+                with open(meta_path) as f:
+                    meta = json.load(f)
+                yield f"data: {json.dumps({'type': 'done', 'data': meta})}\n\n"
+            else:
+                yield f"data: {json.dumps({'type': 'error', 'data': 'Job introuvable'})}\n\n"
+            return
+
         cursor = 0
         idle_ticks = 0
         while True:
@@ -2305,6 +2320,22 @@ def campaign_stream(job_id):
             time.sleep(1)
     return Response(stream_with_context(generate()), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
+
+
+@app.route('/campaign/status/<job_id>')
+def campaign_status(job_id):
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job:
+        done = job['done']
+        total = next((e['data'].get('total') for e in reversed(job['events']) if e['type'] == 'done'), None)
+        return jsonify({'done': done, 'total': total})
+    meta_path = os.path.join(RESULTS_DIR, f'campaign_{job_id}.json')
+    if os.path.exists(meta_path):
+        with open(meta_path) as f:
+            meta = json.load(f)
+        return jsonify({'done': True, 'total': meta.get('total')})
+    return jsonify({'done': False, 'total': None})
 
 
 @app.route('/campaign/download/<job_id>')

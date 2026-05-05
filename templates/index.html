@@ -1436,7 +1436,7 @@ function _campStartStream(jobId, total) {
       es.close();
     }
   };
-  es.onerror = () => { es.close(); };
+  es.onerror = () => { /* let EventSource auto-reconnect */ };
 }
 
 // Step 1: Analyse (preview + filter stats)

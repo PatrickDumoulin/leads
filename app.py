@@ -2287,15 +2287,21 @@ def campaign_start():
 def campaign_stream(job_id):
     def generate():
         cursor = 0
+        idle_ticks = 0
         while True:
             with _jobs_lock:
                 events = _jobs.get(job_id, {}).get('events', [])
                 done   = _jobs.get(job_id, {}).get('done', False)
+            sent = False
             while cursor < len(events):
                 yield f"data: {json.dumps(events[cursor])}\n\n"
                 cursor += 1
+                sent = True
             if done and cursor >= len(events):
                 break
+            idle_ticks += 1
+            if not sent and idle_ticks % 15 == 0:
+                yield ": keepalive\n\n"
             time.sleep(1)
     return Response(stream_with_context(generate()), mimetype='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})

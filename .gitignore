@@ -1,5 +1,6 @@
 # Base de données
 leads.db
+scrape_cache.db
 
 # Runtime
 server.pid

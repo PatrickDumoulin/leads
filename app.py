@@ -95,6 +95,45 @@ RESULTS_DIR = os.path.join(os.path.dirname(__file__), '.job_results')
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 DB_PATH = os.path.join(os.path.dirname(__file__), 'leads.db')
+SCRAPE_CACHE_PATH = os.path.join(os.path.dirname(__file__), 'scrape_cache.db')
+_scrape_cache_lock = threading.Lock()
+
+
+def _init_scrape_cache():
+    with sqlite3.connect(SCRAPE_CACHE_PATH) as conn:
+        conn.execute('''CREATE TABLE IF NOT EXISTS cache (
+            url     TEXT PRIMARY KEY,
+            content TEXT,
+            cached_at TEXT NOT NULL
+        )''')
+        conn.commit()
+
+_init_scrape_cache()
+
+
+def _scrape_cache_get(url):
+    try:
+        with sqlite3.connect(SCRAPE_CACHE_PATH) as conn:
+            row = conn.execute(
+                "SELECT content FROM cache WHERE url = ? AND cached_at > datetime('now', '-30 days')",
+                (url,)
+            ).fetchone()
+            return row[0] if row is not None else None
+    except Exception:
+        return None
+
+
+def _scrape_cache_set(url, content):
+    try:
+        with _scrape_cache_lock:
+            with sqlite3.connect(SCRAPE_CACHE_PATH) as conn:
+                conn.execute(
+                    'INSERT OR REPLACE INTO cache (url, content, cached_at) VALUES (?, ?, ?)',
+                    (url, content or '', datetime.now().isoformat())
+                )
+                conn.commit()
+    except Exception:
+        pass
 
 
 def init_db():
@@ -393,12 +432,16 @@ def scrape_website(url, timeout=8):
     url = url.strip()
     if not url.startswith(('http://', 'https://')):
         url = 'https://' + url
+
+    cached = _scrape_cache_get(url)
+    if cached is not None:
+        return cached or None
+
     try:
         resp = req_lib.get(url, headers=SCRAPE_HEADERS, timeout=timeout, allow_redirects=True, verify=False)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, 'html.parser')
 
-        # Remove clutter
         for tag in soup(['script', 'style', 'nav', 'footer', 'header', 'aside', 'form', 'iframe']):
             tag.decompose()
 
@@ -427,7 +470,9 @@ def scrape_website(url, timeout=8):
                     break
 
         text = '\n'.join(dict.fromkeys(parts))
-        return text[:3000] if text.strip() else None
+        result = text[:3000] if text.strip() else None
+        _scrape_cache_set(url, result)
+        return result
     except Exception:
         return None
 
